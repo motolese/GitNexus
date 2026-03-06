@@ -3,7 +3,7 @@ import { ASTCache } from './ast-cache.js';
 import { SymbolTable } from './symbol-table.js';
 import { ImportMap } from './import-processor.js';
 import Parser from 'tree-sitter';
-import { loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
+import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
 import { getLanguageFromFilename, yieldToEventLoop } from './utils.js';
@@ -159,6 +159,7 @@ export const processCalls = async (
     // 1. Check language support first
     const language = getLanguageFromFilename(file.path);
     if (!language) continue;
+    if (!isLanguageAvailable(language)) continue;
 
     const queryStr = LANGUAGE_QUERIES[language];
     if (!queryStr) continue;
