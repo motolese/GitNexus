@@ -92,6 +92,22 @@ const processParsingWithWorkers = async (
     allConstructorBindings.push(...result.constructorBindings);
   }
 
+  // Merge and log skipped languages from workers
+  const skippedLanguages = new Map<string, number>();
+  for (const result of chunkResults) {
+    if (result.skippedLanguages) {
+      for (const [lang, count] of Object.entries(result.skippedLanguages)) {
+        skippedLanguages.set(lang, (skippedLanguages.get(lang) || 0) + count);
+      }
+    }
+  }
+  if (skippedLanguages.size > 0) {
+    const summary = Array.from(skippedLanguages.entries())
+      .map(([lang, count]) => `${lang}: ${count}`)
+      .join(', ');
+    console.warn(`  Skipped unsupported languages: ${summary}`);
+  }
+
   // Final progress
   onFileProgress?.(total, total, 'done');
   return { imports: allImports, calls: allCalls, heritage: allHeritage, routes: allRoutes, constructorBindings: allConstructorBindings };

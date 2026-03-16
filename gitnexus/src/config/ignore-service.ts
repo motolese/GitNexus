@@ -5,15 +5,17 @@ const _require = createRequire(import.meta.url);
 const ignore = _require('ignore');
 
 let userIgnore: ReturnType<typeof ignore> | null = null;
-let userIgnoreLoaded = false;
+let userIgnoreLoadedFor: string | null = null;
 
 /**
- * Load .gitnexusignore from repo root (lazy, cached).
+ * Load .gitnexusignore from repo root (lazy, cached per repo).
  * Uses the `ignore` npm package for full .gitignore glob spec compliance.
+ * Re-loads when repoPath changes (multi-repo support).
  */
 export const loadUserIgnore = (repoPath: string): void => {
-  if (userIgnoreLoaded) return;
-  userIgnoreLoaded = true;
+  if (userIgnoreLoadedFor === repoPath) return;
+  userIgnoreLoadedFor = repoPath;
+  userIgnore = null;
   const ignorePath = path.join(repoPath, '.gitnexusignore');
   try {
     const content = fs.readFileSync(ignorePath, 'utf-8');
@@ -26,7 +28,7 @@ export const loadUserIgnore = (repoPath: string): void => {
 /** Reset cache (for tests). */
 export const resetUserIgnore = (): void => {
   userIgnore = null;
-  userIgnoreLoaded = false;
+  userIgnoreLoadedFor = null;
 };
 
 const DEFAULT_IGNORE_LIST = new Set([

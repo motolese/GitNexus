@@ -67,15 +67,37 @@ describe('.gitnexusignore', () => {
     expect(shouldIgnorePath('src/index.ts')).toBe(false);
   });
 
-  it('caches the loaded ignore patterns (lazy load)', () => {
+  it('caches the loaded ignore patterns for same repo (lazy load)', () => {
     fs.writeFileSync(path.join(tmpDir, '.gitnexusignore'), 'secret/\n');
     loadUserIgnore(tmpDir);
 
     expect(shouldIgnorePath('secret/keys.ts')).toBe(true);
 
-    // Calling again with different path should NOT reload (cached)
-    loadUserIgnore('/nonexistent/path');
+    // Calling again with same path should NOT reload (cached)
+    loadUserIgnore(tmpDir);
     expect(shouldIgnorePath('secret/keys.ts')).toBe(true);
+  });
+
+  it('reloads patterns when repoPath changes (multi-repo)', () => {
+    // First repo ignores "secret/"
+    fs.writeFileSync(path.join(tmpDir, '.gitnexusignore'), 'secret/\n');
+    loadUserIgnore(tmpDir);
+    expect(shouldIgnorePath('secret/keys.ts')).toBe(true);
+    expect(shouldIgnorePath('docs/readme.md')).toBe(false);
+
+    // Second repo ignores "docs/" instead
+    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gitnexus-test2-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir2, '.gitnexusignore'), 'docs/\n');
+      loadUserIgnore(tmpDir2);
+
+      // Second repo's patterns should now be active
+      expect(shouldIgnorePath('docs/readme.md')).toBe(true);
+      // First repo's patterns should no longer apply
+      expect(shouldIgnorePath('secret/keys.ts')).toBe(false);
+    } finally {
+      fs.rmSync(tmpDir2, { recursive: true, force: true });
+    }
   });
 
   it('resetUserIgnore clears the cache', () => {
