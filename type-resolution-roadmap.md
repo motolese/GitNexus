@@ -47,13 +47,15 @@ The most valuable next move is to let those signals participate in more places, 
 
 ## Phase 7: Cross-Scope and Return-Aware Propagation
 
+> **Status: COMPLETE** — shipped in `feat/phase7-type-resolution` (commits `ed767e3`, `ca4c6c1`, `d79237e`).
+
 ### Goal
 
 Allow loop inference and assignment inference to see more than the current function-local environment.
 
 ### Problems this phase addresses
 
-#### 7A. Iterable expressions in Go and similar cases
+#### 7A. Iterable expressions in Go and similar cases (shipped as Phase 7.3)
 
 ```go
 for _, user := range getUsers() {
@@ -63,9 +65,9 @@ for _, user := range getUsers() {
 
 The iterable is a call expression, not an identifier with a local binding.
 
-To resolve `user`, the loop extractor needs access to a return-type source for `getUsers()`.
+Resolved: `ReturnTypeLookup` introduced in Phase 7.1 exposes `lookupRawReturnType`. All seven typed-iteration languages (Go, TypeScript, Python, Rust, Java, Kotlin, C#) now unwrap the raw container type string to extract the element type when the iterable is a direct function call.
 
-#### 7B. File-scope or class-scope iterable typing in PHP
+#### 7B. File-scope or class-scope iterable typing in PHP (shipped as Phase 7.4)
 
 ```php
 foreach ($this->users as $user) {
@@ -75,30 +77,33 @@ foreach ($this->users as $user) {
 
 If `$this->users` is typed through a class property annotation or file/class-scope doc-comment information, the current local-scope-only path may not be enough.
 
-#### 7C. Broader use of already-known return types
+Resolved: Strategy C in the PHP `extractForLoopBinding` walks up the AST to the enclosing `class_declaration`, scans the `declaration_list` for a matching `property_declaration`, and extracts the element type from the `@var` PHPDoc comment (or PHP 7.4+ native type field). The `@param` workaround previously required in the fixture is gone.
+
+#### 7C. Broader use of already-known return types (shipped as Phase 7.1 + 7.2)
 
 The system can already infer receiver types from uniquely resolved call results in `call-processor.ts`. That needs to be generalised so `TypeEnv` can benefit from it too.
 
-### Engineering direction
+Resolved: `ReturnTypeLookup` (Phase 7.1) encapsulates `lookupReturnType` / `lookupRawReturnType` and is threaded through `ForLoopExtractorContext` (Phase 7.2) to all for-loop extractors. Phase 7.2 also added the `pendingCallResults` infrastructure (the `PendingAssignment` discriminated union in `types.ts` and the Tier 2b processing loop in `type-env.ts`), but no extractor populates it yet — `var x = f()` propagation is Phase 9 work.
 
-- extend loop and propagation extractors so they can access more than the current local scope
-- expose file-scope string bindings where needed
-- introduce a shared `returnTypeMap` or equivalent lookup mechanism
-- keep the interface change coordinated across extractors to avoid partial semantics by language
+### Engineering direction (as implemented)
 
-### Expected impact
+- introduced `ReturnTypeLookup` interface and `buildReturnTypeLookup` factory in `type-env.ts`
+- replaced per-extractor `(node, env)` signature with `ForLoopExtractorContext` context object for extensibility
+- added `extractElementTypeFromString` to `shared.ts` as the canonical raw-string container unwrapper
+- added PHP Strategy C helper (`findClassPropertyElementType`) scoped to the PHP extractor
+- kept all changes backwards-compatible — explicit-type paths are untouched
 
-This phase should unlock:
+### Delivered impact
 
-- loop inference for iterable-producing call expressions
-- broader propagation from method / function return types
-- fewer missed bindings in real-world code that avoids explicit variable annotations
+- loop inference now works for direct function call iterables in all 7 typed-iteration languages
+- PHP `$this->property` foreach is resolved from class-level `@var` without requiring `@param` workarounds
+- `pendingCallResults` infrastructure is in place (Tier 2b loop + `PendingAssignment` union) — dormant until an extractor emits `{ kind: 'callResult' }` (Phase 9)
 
 ### Risk level
 
-**Medium**
+**Medium** (as predicted)
 
-This work touches extractor interfaces across multiple languages, so the coordination cost is real. However, the conceptual model is an extension of existing behavior rather than a new analysis paradigm.
+The interface change touched all extractors but remained additive — no existing paths were changed.
 
 ---
 
@@ -250,19 +255,18 @@ Missing or weak areas include:
 
 Key remaining gap:
 
-- iterable call expressions in range loops
+- ~~iterable call expressions in range loops~~ ✓ shipped in Phase 7.3
 
-**Priority:** High  
-**Reason:** Go codebases frequently rely on return-value-based iteration patterns.
+**Priority:** Medium (chained property access remains for Phase 8)
 
 ### PHP
 
 Key remaining gaps:
 
-- file/class-scope iterable propagation
+- ~~file/class-scope iterable propagation~~ ✓ shipped in Phase 7.4 (Strategy C)
 - chained property access
 
-**Priority:** High  
+**Priority:** High
 **Reason:** PHP heavily benefits from doc-comment-aware field and property modelling.
 
 ### Rust
