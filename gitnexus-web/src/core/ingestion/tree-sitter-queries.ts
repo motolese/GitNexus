@@ -317,6 +317,172 @@ export const RUST_QUERIES = `
 (impl_item trait: (generic_type type: (type_identifier) @heritage.trait) type: (type_identifier) @heritage.class) @heritage
 `;
 
+// PHP queries - works with tree-sitter-php (php_only grammar)
+export const PHP_QUERIES = `
+; ── Namespace ────────────────────────────────────────────────────────────────
+(namespace_definition
+  name: (namespace_name) @name) @definition.namespace
+
+; ── Classes ──────────────────────────────────────────────────────────────────
+(class_declaration
+  name: (name) @name) @definition.class
+
+; ── Interfaces ───────────────────────────────────────────────────────────────
+(interface_declaration
+  name: (name) @name) @definition.interface
+
+; ── Traits ───────────────────────────────────────────────────────────────────
+(trait_declaration
+  name: (name) @name) @definition.trait
+
+; ── Enums (PHP 8.1) ──────────────────────────────────────────────────────────
+(enum_declaration
+  name: (name) @name) @definition.enum
+
+; ── Top-level functions ───────────────────────────────────────────────────────
+(function_definition
+  name: (name) @name) @definition.function
+
+; ── Methods (including constructors) ─────────────────────────────────────────
+(method_declaration
+  name: (name) @name) @definition.method
+
+; ── Class properties (including Eloquent $fillable, $casts, etc.) ────────────
+(property_declaration
+  (property_element
+    (variable_name
+      (name) @name))) @definition.property
+
+; ── Imports: use statements ──────────────────────────────────────────────────
+; Simple: use App\\Models\\User;
+(namespace_use_declaration
+  (namespace_use_clause
+    (qualified_name) @import.source)) @import
+
+; ── Function/method calls ────────────────────────────────────────────────────
+; Regular function call: foo()
+(function_call_expression
+  function: (name) @call.name) @call
+
+; Method call: $obj->method()
+(member_call_expression
+  name: (name) @call.name) @call
+
+; Nullsafe method call: $obj?->method()
+(nullsafe_member_call_expression
+  name: (name) @call.name) @call
+
+; Static call: Foo::bar() (php_only uses scoped_call_expression)
+(scoped_call_expression
+  name: (name) @call.name) @call
+
+; ── Heritage: extends ────────────────────────────────────────────────────────
+(class_declaration
+  name: (name) @heritage.class
+  (base_clause
+    [(name) (qualified_name)] @heritage.extends)) @heritage
+
+; ── Heritage: implements ─────────────────────────────────────────────────────
+(class_declaration
+  name: (name) @heritage.class
+  (class_interface_clause
+    [(name) (qualified_name)] @heritage.implements)) @heritage.impl
+
+; ── Heritage: use trait (must capture enclosing class name) ──────────────────
+(class_declaration
+  name: (name) @heritage.class
+  body: (declaration_list
+    (use_declaration
+      [(name) (qualified_name)] @heritage.trait))) @heritage
+`;
+
+// Ruby queries - works with tree-sitter-ruby
+// NOTE: Ruby uses `call` for require, include, extend, prepend, attr_* etc.
+// These are all captured as @call and routed in JS post-processing:
+//   - require/require_relative → import extraction
+//   - include/extend/prepend → heritage (mixin) extraction
+//   - attr_accessor/attr_reader/attr_writer → property definition extraction
+//   - everything else → regular call extraction
+export const RUBY_QUERIES = `
+; ── Modules ──────────────────────────────────────────────────────────────────
+(module
+  name: (constant) @name) @definition.module
+
+; ── Classes ──────────────────────────────────────────────────────────────────
+(class
+  name: (constant) @name) @definition.class
+
+; ── Instance methods ─────────────────────────────────────────────────────────
+(method
+  name: (identifier) @name) @definition.method
+
+; ── Singleton (class-level) methods ──────────────────────────────────────────
+(singleton_method
+  name: (identifier) @name) @definition.function
+
+; ── All calls (require, include, attr_*, and regular calls routed in JS) ─────
+(call
+  method: (identifier) @call.name) @call
+
+; ── Heritage: class < SuperClass ─────────────────────────────────────────────
+(class
+  name: (constant) @heritage.class
+  superclass: (superclass
+    (constant) @heritage.extends)) @heritage`;
+    
+// Swift queries - works with tree-sitter-swift
+export const SWIFT_QUERIES = `
+; Classes
+(class_declaration "class" name: (type_identifier) @name) @definition.class
+
+; Structs
+(class_declaration "struct" name: (type_identifier) @name) @definition.struct
+
+; Enums
+(class_declaration "enum" name: (type_identifier) @name) @definition.enum
+
+; Extensions (mapped to class — no dedicated label in schema)
+(class_declaration "extension" name: (user_type (type_identifier) @name)) @definition.class
+
+; Actors
+(class_declaration "actor" name: (type_identifier) @name) @definition.class
+
+; Protocols (mapped to interface)
+(protocol_declaration name: (type_identifier) @name) @definition.interface
+
+; Type aliases
+(typealias_declaration name: (type_identifier) @name) @definition.type
+
+; Functions (top-level and methods)
+(function_declaration name: (simple_identifier) @name) @definition.function
+
+; Protocol method declarations
+(protocol_function_declaration name: (simple_identifier) @name) @definition.method
+
+; Initializers
+(init_declaration) @definition.constructor
+
+; Properties (stored and computed)
+(property_declaration (pattern (simple_identifier) @name)) @definition.property
+
+; Imports
+(import_declaration (identifier (simple_identifier) @import.source)) @import
+
+; Calls - direct function calls
+(call_expression (simple_identifier) @call.name) @call
+
+; Calls - member/navigation calls (obj.method())
+(call_expression (navigation_expression (navigation_suffix (simple_identifier) @call.name))) @call
+
+; Heritage - class/struct/enum inheritance and protocol conformance
+(class_declaration name: (type_identifier) @heritage.class
+  (inheritance_specifier inherits_from: (user_type (type_identifier) @heritage.extends))) @heritage
+
+; Heritage - protocol inheritance
+(protocol_declaration name: (type_identifier) @heritage.class
+  (inheritance_specifier inherits_from: (user_type (type_identifier) @heritage.extends))) @heritage
+`;
+
 export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.TypeScript]: TYPESCRIPT_QUERIES,
   [SupportedLanguages.JavaScript]: JAVASCRIPT_QUERIES,
@@ -327,5 +493,9 @@ export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.CPlusPlus]: CPP_QUERIES,
   [SupportedLanguages.CSharp]: CSHARP_QUERIES,
   [SupportedLanguages.Rust]: RUST_QUERIES,
+  [SupportedLanguages.PHP]: PHP_QUERIES,
+  [SupportedLanguages.Ruby]: RUBY_QUERIES,
+  [SupportedLanguages.Kotlin]: '', // Kotlin WASM parser not yet available for web
+  [SupportedLanguages.Swift]: SWIFT_QUERIES,
 };
  

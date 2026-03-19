@@ -13,7 +13,7 @@
 import { detectFrameworkFromPath } from './framework-detection';
 
 // ============================================================================
-// NAME PATTERNS - All 9 supported languages
+// NAME PATTERNS - All 11 supported languages
 // ============================================================================
 
 /**
@@ -101,6 +101,54 @@ const ENTRY_POINT_PATTERNS: Record<string, RegExp[]> = {
     /^Create[A-Z]/,           // Factory patterns
     /^Run$/,                  // Run methods
     /^Start$/,                // Start methods
+  ],
+
+  // Swift / iOS
+  'swift': [
+    /^viewDidLoad$/,                  // UIKit lifecycle
+    /^viewWillAppear$/,               // UIKit lifecycle
+    /^viewDidAppear$/,                // UIKit lifecycle
+    /^viewWillDisappear$/,            // UIKit lifecycle
+    /^viewDidDisappear$/,             // UIKit lifecycle
+    /^application\(/,                 // AppDelegate methods
+    /^scene\(/,                       // SceneDelegate methods
+    /^body$/,                         // SwiftUI View.body
+    /Coordinator$/,                   // Coordinator pattern
+    /^sceneDidBecomeActive$/,         // SceneDelegate lifecycle
+    /^sceneWillResignActive$/,        // SceneDelegate lifecycle
+    /^didFinishLaunchingWithOptions$/, // AppDelegate
+    /ViewController$/,                // ViewController classes
+    /^configure[A-Z]/,               // Configuration methods
+    /^setup[A-Z]/,                    // Setup methods
+    /^makeBody$/,                     // SwiftUI ViewModifier
+  ],
+
+  // PHP / Laravel
+  'php': [
+    /Controller$/,            // UserController (class name convention)
+    /^handle$/,               // Job::handle(), Listener::handle()
+    /^execute$/,              // Command::execute()
+    /^boot$/,                 // ServiceProvider::boot()
+    /^register$/,             // ServiceProvider::register()
+    /^__invoke$/,             // Invokable controllers/actions
+    /^(index|show|store|update|destroy|create|edit)$/,  // RESTful resource methods
+    /^(get|post|put|delete|patch)[A-Z]/,  // Explicit HTTP method actions
+    /^run$/,                  // Command/Job run()
+    /^fire$/,                 // Event fire()
+    /^dispatch$/,             // Dispatchable jobs
+    /Service$/,               // UserService (Service layer)
+    /Repository$/,            // UserRepository (Repository pattern)
+    /^find$/,                 // Repository::find()
+    /^findAll$/,              // Repository::findAll()
+    /^save$/,                 // Repository::save()
+    /^delete$/,               // Repository::delete()
+  ],
+
+  // Ruby
+  'ruby': [
+    /^call$/,                 // Service objects (MyService.call)
+    /^perform$/,              // Background jobs (Sidekiq, ActiveJob)
+    /^execute$/,              // Command pattern
   ],
 };
 
@@ -250,9 +298,23 @@ export function isTestFile(filePath: string): boolean {
     p.includes('/src/test/') ||
     // Rust test patterns (inline tests are different, but test files)
     p.includes('/tests/') ||
+    // Swift/iOS test patterns
+    p.endsWith('tests.swift') ||
+    p.endsWith('test.swift') ||
+    p.includes('uitests/') ||
     // C# test patterns
     p.includes('.tests/') ||
-    p.includes('tests.cs')
+    p.includes('tests.cs') ||
+    // PHP/Laravel test patterns
+    p.endsWith('test.php') ||
+    p.endsWith('spec.php') ||
+    p.includes('/tests/feature/') ||
+    p.includes('/tests/unit/') ||
+    // Ruby test patterns
+    p.endsWith('_spec.rb') ||
+    p.endsWith('_test.rb') ||
+    p.includes('/spec/') ||
+    p.includes('/test/fixtures/')
   );
 }
 
