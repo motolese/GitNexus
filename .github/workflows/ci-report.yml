@@ -67,6 +67,7 @@ jobs:
           echo "tests=$(cat tests-result | tr -d '[:space:]')"     >> "$GITHUB_OUTPUT"
 
       - name: Download test reports
+        id: download-test-reports
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
           script: |
@@ -97,6 +98,7 @@ jobs:
             fs.writeFileSync(path.join(dest, 'test-reports.zip'), Buffer.from(zip.data));
 
       - name: Extract test reports
+        if: steps.download-test-reports.outcome == 'success'
         shell: bash
         run: |
           cd "$RUNNER_TEMP/test-reports"
@@ -256,8 +258,9 @@ jobs:
             function delta(pct, basePct) {
               if (pct === 'N/A' || basePct === 'N/A') return '—';
               const d = (pct - basePct).toFixed(1);
-              if (d > 0) return `📈 +${d}%`;
-              if (d < 0) return `📉 ${d}%`;
+              const dNum = parseFloat(d);
+              if (dNum > 0) return `📈 +${d}%`;
+              if (dNum < 0) return `📉 ${d}%`;
               return '＝';
             }
 
@@ -321,6 +324,7 @@ jobs:
               repo: context.repo.repo,
               issue_number: prNumber,
               per_page: 100,
+              direction: 'desc',
             });
 
             const marker = '<!-- ci-report -->';
