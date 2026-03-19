@@ -96,6 +96,22 @@ The goal is not to build a compiler. The goal is to support high-value static an
 
 ## Open Phases
 
+### Phase P: Polymorphism & Overloading
+
+**Plan:** `docs/plans/2026-03-19-feat-polymorphism-overloading-type-resolution-plan.md`
+
+Four incremental phases:
+1. **Parameter type metadata** — extend `SymbolDefinition` with `parameterTypes: string[]` extracted during parsing
+2. **Overload disambiguation** — filter overloaded methods by argument literal types at call sites
+3. **Constructor-visible virtual dispatch** — `Base b = new Derived(); b.method()` resolves to `Derived#method` when constructor type is a known subclass
+4. **Covariant return type awareness** — prefer child's return type over inherited definition
+
+Languages benefiting: Java, Kotlin, C#, C++, TypeScript (overloading). All OOP languages (virtual dispatch).
+
+**Impact: High | Effort: High**
+
+---
+
 ### Phase S: Swift Parity
 
 **Blocked on** tree-sitter-swift Node 22 compatibility.
@@ -145,10 +161,12 @@ config.validate();  // missed
 ```
 Milestone D (Phases A, B, C) ✅ ──┐
                                    ├──→ Phase 14 (cross-file)
+Phase P (polymorphism) ───────────┤
+                                   │
 Phase S (Swift parity) ───────────┘
 
-Phase S is independent of Phase 14.
-Phase 14 depends on Milestone D being stable.
+Phase P and Phase S are independent of each other and Phase 14.
+Phase 14 benefits from Phase P (better per-file resolution = fewer cross-file gaps).
 ```
 
 ---
@@ -186,6 +204,10 @@ Consolidated Phases 10–13 into 3 balanced phases. Loop-fixpoint bridge, MRO-aw
 ### Milestone E — Cross-Boundary ← **next** (Phase 14)
 
 Export-type index, cross-file binding propagation.
+
+### Milestone P — Polymorphism & Overloading (Phase P)
+
+Parameter type metadata, overload disambiguation, constructor-visible virtual dispatch, covariant return types.
 
 ### Milestone S — Swift Parity (Phase S)
 
