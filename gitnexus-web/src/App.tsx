@@ -26,6 +26,7 @@ const AppContent = () => {
     isRightPanelOpen,
     runPipeline,
     runPipelineFromFiles,
+    hydrateServerGraph,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
     refreshLLMSettings,
@@ -133,7 +134,7 @@ const AppContent = () => {
     }
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, initializeAgent]);
 
-  const handleServerConnect = useCallback((result: ConnectToServerResult) => {
+  const handleServerConnect = useCallback(async (result: ConnectToServerResult) => {
     // Extract project name from repoPath
     const repoPath = result.repoInfo.repoPath;
     const projectName = repoPath.split('/').pop() || 'server-project';
@@ -155,6 +156,8 @@ const AppContent = () => {
       fileMap.set(path, content);
     }
     setFileContents(fileMap);
+
+    await hydrateServerGraph(result);
 
     // Transition directly to exploring view
     setViewMode('exploring');
@@ -182,7 +185,7 @@ const AppContent = () => {
         initializeAgent(projectName);
       }
     });
-  }, [setViewMode, setGraph, setFileContents, setProjectName, setProgress, initializeAgent, startEmbeddings, hydrateWorkerFromServer]);
+  }, [setViewMode, setGraph, setFileContents, setProjectName, setProgress, initializeAgent, startEmbeddings, hydrateServerGraph, hydrateWorkerFromServer]);
 
   // Auto-connect when ?server query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
@@ -214,7 +217,7 @@ const AppContent = () => {
         setProgress({ phase: 'extracting', percent: 97, message: 'Processing...', detail: 'Extracting file contents' });
       }
     }).then(async (result) => {
-      handleServerConnect(result);
+      await handleServerConnect(result);
 
       // Store server URL and fetch available repos for the repo switcher
       setServerBaseUrl(baseUrl);

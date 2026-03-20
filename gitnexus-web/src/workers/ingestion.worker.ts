@@ -56,6 +56,29 @@ let enrichmentCancelled = false;
 // Chat cancellation flag
 let chatCancelled = false;
 
+const loadResultIntoWorkerState = async (result: PipelineResult): Promise<void> => {
+  currentGraphResult = result;
+  storedFileContents = result.fileContents;
+
+  const bm25DocCount = buildBM25Index(storedFileContents);
+  if (import.meta.env.DEV) {
+    console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
+  }
+
+  try {
+    const lbug = await getLbugAdapter();
+    await lbug.loadGraphToLbug(result.graph, result.fileContents);
+
+    if (import.meta.env.DEV) {
+      const stats = await lbug.getLbugStats();
+      console.log('LadybugDB loaded:', stats);
+      console.log('📁 Stored', storedFileContents.size, 'files for grep/read tools');
+    }
+  } catch {
+    // LadybugDB is optional - silently continue without it
+  }
+};
+
 // ============================================================
 // HTTP helpers for backend mode
 // ============================================================
@@ -163,18 +186,7 @@ const workerApi = {
     console.log('🔧 runPipeline called with clusteringConfig:', !!clusteringConfig);
     // Run the actual pipeline
     const result = await runIngestionPipeline(file, onProgress);
-    currentGraphResult = result;
-    
-    // Store file contents for grep/read tools (full content, not truncated)
-    storedFileContents = result.fileContents;
-    
-    // Build BM25 index for keyword search (instant, ~100ms)
-    const bm25DocCount = buildBM25Index(storedFileContents);
-    if (import.meta.env.DEV) {
-      console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
-    }
-    
-    // Load graph into LadybugDB for querying (optional - gracefully degrades)
+    // Load graph into local indexes for query/AI features.
     try {
       onProgress({
         phase: 'complete',
@@ -186,15 +198,7 @@ const workerApi = {
           nodesCreated: result.graph.nodeCount,
         },
       });
-
-      const lbug = await getLbugAdapter();
-      await lbug.loadGraphToLbug(result.graph, result.fileContents);
-
-      if (import.meta.env.DEV) {
-        const stats = await lbug.getLbugStats();
-        console.log('LadybugDB loaded:', stats);
-        console.log('📁 Stored', storedFileContents.size, 'files for grep/read tools');
-      }
+      await loadResultIntoWorkerState(result);
     } catch {
       // LadybugDB is optional - silently continue without it
     }
@@ -311,18 +315,7 @@ const workerApi = {
 
     // Run the pipeline
     const result = await runPipelineFromFiles(files, onProgress);
-    currentGraphResult = result;
-    
-    // Store file contents for grep/read tools (full content, not truncated)
-    storedFileContents = result.fileContents;
-    
-    // Build BM25 index for keyword search (instant, ~100ms)
-    const bm25DocCount = buildBM25Index(storedFileContents);
-    if (import.meta.env.DEV) {
-      console.log(`🔍 BM25 index built: ${bm25DocCount} documents`);
-    }
-    
-    // Load graph into LadybugDB for querying (optional - gracefully degrades)
+    // Load graph into local indexes for query/AI features.
     try {
       onProgress({
         phase: 'complete',
@@ -334,15 +327,7 @@ const workerApi = {
           nodesCreated: result.graph.nodeCount,
         },
       });
-
-      const lbug = await getLbugAdapter();
-      await lbug.loadGraphToLbug(result.graph, result.fileContents);
-
-      if (import.meta.env.DEV) {
-        const stats = await lbug.getLbugStats();
-        console.log('LadybugDB loaded:', stats);
-        console.log('📁 Stored', storedFileContents.size, 'files for grep/read tools');
-      }
+      await loadResultIntoWorkerState(result);
     } catch {
       // LadybugDB is optional - silently continue without it
     }
@@ -355,6 +340,17 @@ const workerApi = {
     
     // Convert to serializable format for transfer back to main thread
     return serializePipelineResult(result);
+  },
+
+  async hydrateServerGraph(serialized: SerializablePipelineResult): Promise<void> {
+    const graph = createKnowledgeGraph();
+    serialized.nodes.forEach((node) => graph.addNode(node));
+    serialized.relationships.forEach((relationship) => graph.addRelationship(relationship));
+
+    await loadResultIntoWorkerState({
+      graph,
+      fileContents: new Map(Object.entries(serialized.fileContents)),
+    });
   },
 
   // ============================================================
