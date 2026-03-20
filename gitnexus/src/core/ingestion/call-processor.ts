@@ -23,12 +23,15 @@ import {
   extractMixedChain,
   type MixedChainStep,
 } from './utils.js';
-import { buildTypeEnv } from './type-env.js';
+import { buildTypeEnv, isSubclassOf } from './type-env.js';
 import type { ConstructorBinding } from './type-env.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedAssignment, ExtractedHeritage, ExtractedRoute, FileConstructorBindings } from './workers/parse-worker.js';
 import { callRouters } from './call-routing.js';
 import { extractReturnTypeName, stripNullable } from './type-extractors/shared.js';
+import { typeConfigs } from './type-extractors/index.js';
+import type { LiteralTypeInferrer } from './type-extractors/types.js';
+import type { SyntaxNode } from './utils.js';
 
 // Stdlib methods that preserve the receiver's type identity. When TypeEnv already
 // strips nullable wrappers (Option<User> → User), these chain steps are no-ops
@@ -139,6 +142,12 @@ export const processCalls = async (
   const parser = await loadParser();
   const collectedHeritage: ExtractedHeritage[] = [];
   const pendingWrites: { receiverTypeName: string; propertyName: string; filePath: string; srcId: string }[] = [];
+  // Phase P cross-file: accumulate heritage across files for cross-file isSubclassOf.
+  // Used as a secondary check when per-file parentMap lacks the relationship — helps
+  // when the heritage-declaring file is processed before the call site file.
+  // For remaining cases (reverse file order), the SymbolTable class-type fallback applies.
+  const globalParentMap = new Map<string, string[]>();
+  const globalParentSeen = new Map<string, Set<string>>();
   const logSkipped = isVerboseIngestionEnabled();
   const skippedByLang = logSkipped ? new Map<string, number>() : null;
 
@@ -202,6 +211,17 @@ export const processCalls = async (
       }
     }
     const parentMap: ReadonlyMap<string, readonly string[]> = fileParentMap;
+    // Merge per-file heritage into globalParentMap for cross-file isSubclassOf lookups.
+    // Uses a parallel Set (globalParentSeen) for O(1) deduplication instead of O(n) includes().
+    for (const [cls, parents] of fileParentMap) {
+      let global = globalParentMap.get(cls);
+      let seen = globalParentSeen.get(cls);
+      if (!global) { global = []; globalParentMap.set(cls, global); }
+      if (!seen) { seen = new Set(); globalParentSeen.set(cls, seen); }
+      for (const p of parents) {
+        if (!seen.has(p)) { seen.add(p); global.push(p); }
+      }
+    }
 
     const typeEnv = lang ? buildTypeEnv(tree, lang, { symbolTable: ctx.symbols, parentMap }) : null;
     const callRouter = callRouters[language];
@@ -325,6 +345,41 @@ export const processCalls = async (
       const callForm = inferCallForm(callNode, nameNode);
       const receiverName = callForm === 'member' ? extractReceiverName(nameNode) : undefined;
       let receiverTypeName = receiverName && typeEnv ? typeEnv.lookup(receiverName, callNode) : undefined;
+      // Phase P: virtual dispatch override — when the declared type is a base class but
+      // the constructor created a known subclass, prefer the more specific type.
+      // Checks per-file parentMap first, then falls back to globalParentMap for
+      // cross-file heritage (e.g. Dog extends Animal declared in a different file).
+      // Reconstructs the exact scope key (funcName@startIndex\0varName) from the
+      // enclosing function AST node for a correct, O(1) map lookup.
+      if (receiverTypeName && receiverName && typeEnv && typeEnv.constructorTypeMap.size > 0) {
+        // Reconstruct scope key to match constructorTypeMap's scope\0varName format
+        let scope = '';
+        let p = callNode.parent;
+        while (p) {
+          if (FUNCTION_NODE_TYPES.has(p.type)) {
+            const { funcName } = extractFunctionName(p);
+            if (funcName) { scope = `${funcName}@${p.startIndex}`; break; }
+          }
+          p = p.parent;
+        }
+        const ctorType = typeEnv.constructorTypeMap.get(`${scope}\0${receiverName}`);
+        if (ctorType && ctorType !== receiverTypeName) {
+          // Verify subclass relationship: per-file parentMap first, then cross-file
+          // globalParentMap, then fall back to SymbolTable class verification.
+          // The SymbolTable fallback handles cross-file cases where heritage is declared
+          // in a file not yet processed (e.g. Dog extends Animal in models/Dog.kt when
+          // processing services/App.kt). Since constructorTypeMap only records entries
+          // when a type annotation AND constructor are both present (val x: Base = Sub()),
+          // confirming both are class-like types is sufficient — the original code would
+          // not compile if Sub didn't extend Base.
+          if (isSubclassOf(ctorType, receiverTypeName, parentMap)
+            || isSubclassOf(ctorType, receiverTypeName, globalParentMap)
+            || (ctx.symbols.lookupFuzzy(ctorType).some(d => d.type === 'Class' || d.type === 'Struct')
+              && ctx.symbols.lookupFuzzy(receiverTypeName).some(d => d.type === 'Class' || d.type === 'Struct' || d.type === 'Interface'))) {
+            receiverTypeName = ctorType;
+          }
+        }
+      }
       // Fall back to verified constructor bindings for return type inference
       if (!receiverTypeName && receiverName && receiverIndex.size > 0) {
         const enclosingFunc = findEnclosingFunction(callNode, file.path, ctx);
@@ -379,12 +434,19 @@ export const processCalls = async (
         }
       }
 
+      // Build overload hints for languages with inferLiteralType (Java/Kotlin/C#/C++).
+      // Only used when multiple candidates survive arity filtering — ~1-3% of calls.
+      const langConfig = lang ? typeConfigs[lang as keyof typeof typeConfigs] : undefined;
+      const hints: OverloadHints | undefined = langConfig?.inferLiteralType
+        ? { callNode, inferLiteralType: langConfig.inferLiteralType }
+        : undefined;
+
       const resolved = resolveCallTarget({
         calledName,
         argCount: countCallArguments(callNode),
         callForm,
         receiverTypeName,
-      }, file.path, ctx);
+      }, file.path, ctx, hints);
 
       if (!resolved) return;
       const relId = generateId('CALLS', `${sourceId}:${calledName}->${resolved.nodeId}`);
@@ -475,7 +537,9 @@ const filterCallableCandidates = (
   if (!hasParameterMetadata) return kindFiltered;
 
   return kindFiltered.filter(candidate =>
-    candidate.parameterCount === undefined || candidate.parameterCount === argCount
+    candidate.parameterCount === undefined
+    || (argCount >= (candidate.requiredParameterCount ?? candidate.parameterCount)
+      && argCount <= candidate.parameterCount)
   );
 };
 
@@ -490,12 +554,113 @@ const toResolveResult = (
 });
 
 
+/** Optional hints for overload disambiguation via argument literal types.
+ *  Only available on the sequential path (has AST); worker path passes undefined. */
+interface OverloadHints {
+  callNode: SyntaxNode;
+  inferLiteralType: LiteralTypeInferrer;
+}
+
+/**
+ * Kotlin (and JVM in general) uses boxed type names in parameter declarations
+ * (e.g. `Int`, `Long`, `Boolean`) while inferJvmLiteralType returns unboxed
+ * primitives (`int`, `long`, `boolean`). Normalise both sides to lowercase so
+ * that the comparison `'Int' === 'int'` does not fail.
+ *
+ * Only applied to single-word identifiers that look like a JVM primitive alias;
+ * multi-word or qualified names are left untouched.
+ */
+const KOTLIN_BOXED_TO_PRIMITIVE: Readonly<Record<string, string>> = {
+  Int: 'int',
+  Long: 'long',
+  Short: 'short',
+  Byte: 'byte',
+  Float: 'float',
+  Double: 'double',
+  Boolean: 'boolean',
+  Char: 'char',
+};
+
+const normalizeJvmTypeName = (name: string): string =>
+  KOTLIN_BOXED_TO_PRIMITIVE[name] ?? name;
+
+/**
+ * Try to disambiguate overloaded candidates using argument literal types.
+ * Only invoked when filteredCandidates.length > 1 and at least one has parameterTypes.
+ * Returns the single matching candidate, or null if ambiguous/inconclusive.
+ */
+const tryOverloadDisambiguation = (
+  candidates: SymbolDefinition[],
+  hints: OverloadHints,
+): SymbolDefinition | null => {
+  if (!candidates.some(c => c.parameterTypes)) return null;
+
+  // Find the argument list node in the call expression.
+  // Kotlin wraps value_arguments inside a call_suffix child, so we must also
+  // search one level deeper when a direct match is not found.
+  let argList: any = hints.callNode.childForFieldName?.('arguments')
+    ?? hints.callNode.children.find((c: any) =>
+      c.type === 'arguments' || c.type === 'argument_list' || c.type === 'value_arguments'
+    );
+  if (!argList) {
+    // Kotlin: call_expression → call_suffix → value_arguments
+    const callSuffix = hints.callNode.children.find((c: any) => c.type === 'call_suffix');
+    if (callSuffix) {
+      argList = callSuffix.children.find((c: any) => c.type === 'value_arguments');
+    }
+  }
+  if (!argList) return null;
+
+  const argTypes: (string | undefined)[] = [];
+  for (const arg of argList.namedChildren) {
+    if (arg.type === 'comment') continue;
+    // Unwrap argument wrapper nodes before passing to inferLiteralType:
+    //   - Kotlin value_argument: has 'value' field containing the literal
+    //   - C# argument: has 'expression' field (handles named args like `name: "alice"`
+    //     where firstNamedChild would return name_colon instead of the value)
+    //   - Java/others: arg IS the literal directly (no unwrapping needed)
+    const valueNode = arg.childForFieldName?.('value')
+      ?? arg.childForFieldName?.('expression')
+      ?? (arg.type === 'argument' || arg.type === 'value_argument'
+        ? arg.firstNamedChild ?? arg
+        : arg);
+    argTypes.push(hints.inferLiteralType(valueNode));
+  }
+
+  // If no literal types could be inferred, can't disambiguate
+  if (argTypes.every(t => t === undefined)) return null;
+
+  const matched = candidates.filter(c => {
+    // Keep candidates without type info — conservative: partially-annotated codebases
+    // (e.g. C++ with some missing declarations) may have mixed typed/untyped overloads.
+    // If one typed and one untyped both survive, matched.length > 1 → returns null (no edge).
+    if (!c.parameterTypes) return true;
+    return c.parameterTypes.every((pType, i) => {
+      if (i >= argTypes.length || !argTypes[i]) return true;
+      // Normalise Kotlin boxed type names (Int→int, Boolean→boolean, etc.) so
+      // that the stored declaration type matches the inferred literal type.
+      return normalizeJvmTypeName(pType) === argTypes[i];
+    });
+  });
+
+  if (matched.length === 1) return matched[0];
+  // Multiple survivors may share the same nodeId (e.g. TypeScript overload signatures +
+  // implementation body all collide via generateId). Deduplicate by nodeId — if all
+  // matched candidates resolve to the same graph node, disambiguation succeeded.
+  if (matched.length > 1) {
+    const uniqueIds = new Set(matched.map(c => c.nodeId));
+    if (uniqueIds.size === 1) return matched[0];
+  }
+  return null;
+};
+
 /**
  * Resolve a function call to its target node ID using priority strategy:
  * A. Narrow candidates by scope tier via ctx.resolve()
  * B. Filter to callable symbol kinds (constructor-aware when callForm is set)
  * C. Apply arity filtering when parameter metadata is available
  * D. Apply receiver-type filtering for member calls with typed receivers
+ * E. Apply overload disambiguation via argument literal types (when available)
  *
  * If filtering still leaves multiple candidates, refuse to emit a CALLS edge.
  */
@@ -503,6 +668,7 @@ const resolveCallTarget = (
   call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm' | 'receiverTypeName'>,
   currentFile: string,
   ctx: ResolutionContext,
+  overloadHints?: OverloadHints,
 ): ResolveResult | null => {
   const tiered = ctx.resolve(call.calledName, currentFile);
   if (!tiered) return null;
@@ -543,8 +709,22 @@ const resolveCallTarget = (
       if (ownerFiltered.length === 1) {
         return toResolveResult(ownerFiltered[0], tiered.tier);
       }
+      // E. Try overload disambiguation on the narrowed pool
+      if ((fileFiltered.length > 1 || ownerFiltered.length > 1) && overloadHints) {
+        const overloadPool = ownerFiltered.length > 1 ? ownerFiltered : fileFiltered;
+        const disambiguated = tryOverloadDisambiguation(overloadPool, overloadHints);
+        if (disambiguated) return toResolveResult(disambiguated, tiered.tier);
+      }
       if (fileFiltered.length > 1 || ownerFiltered.length > 1) return null;
     }
+  }
+
+  // E. Overload disambiguation: when multiple candidates survive arity + receiver filtering,
+  // try matching argument literal types against parameter types (Phase P).
+  // Only available on sequential path (has AST); worker path falls through gracefully.
+  if (filteredCandidates.length > 1 && overloadHints) {
+    const disambiguated = tryOverloadDisambiguation(filteredCandidates, overloadHints);
+    if (disambiguated) return toResolveResult(disambiguated, tiered.tier);
   }
 
   if (filteredCandidates.length !== 1) return null;

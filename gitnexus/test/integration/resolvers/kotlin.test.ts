@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import {
-  FIXTURES, getRelationships, getNodesByLabel, edgeSet,
+  FIXTURES, getRelationships, getNodesByLabel, getNodesByLabelFull, edgeSet,
   runPipelineFromRepo, type PipelineResult,
 } from './helpers.js';
 
@@ -1530,5 +1530,77 @@ describe('Kotlin null-check narrowing resolution (Phase C)', () => {
       c.target === 'save' && c.source === 'processLocalNullable' && c.targetFilePath.includes('User'),
     );
     expect(saveCall).toBeDefined();
+  });
+});
+
+// ── Phase P: Overload Disambiguation via Parameter Types ─────────────────
+
+describe('Kotlin overload disambiguation by parameter types', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-overload-param-types'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects lookup function with parameterTypes on graph node', () => {
+    const nodes = getNodesByLabelFull(result, 'Function');
+    const lookupNodes = nodes.filter(m => m.name === 'lookup');
+    expect(lookupNodes.length).toBe(1);
+    expect(lookupNodes[0].properties.parameterTypes).toEqual(['Int']);
+  });
+
+  it('emits CALLS edge from run() → lookup() via overload disambiguation', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const lookupCalls = calls.filter(c => c.source === 'run' && c.target === 'lookup');
+    // Both lookup(42) and lookup("alice") resolve to same nodeId → 1 CALLS edge
+    expect(lookupCalls.length).toBe(1);
+  });
+});
+
+// ── Phase P: Virtual Dispatch via Constructor Type (cross-file) ──────────
+
+describe('Kotlin virtual dispatch via constructor type (cross-file)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-virtual-dispatch'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Dog class', () => {
+    const classes = getNodesByLabel(result, 'Class');
+    expect(classes).toContain('Dog');
+  });
+
+  it('resolves animal.speak() to models/Dog.kt via constructor type override', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const speakCall = calls.find(c =>
+      c.source === 'process' && c.target === 'speak' && c.targetFilePath === 'models/Dog.kt',
+    );
+    expect(speakCall).toBeDefined();
+  });
+});
+
+// ── Phase P: Default Parameter Arity Resolution ──────────────────────────
+
+describe('Kotlin default parameter arity resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-default-params'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves greet("Alice") with 1 arg to greet with 2 params (1 default)', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const greetCalls = calls.filter(c => c.source === 'process' && c.target === 'greet');
+    expect(greetCalls.length).toBe(1);
   });
 });

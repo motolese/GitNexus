@@ -1,5 +1,5 @@
 import type { SyntaxNode } from '../utils.js';
-import type { LanguageTypeConfig, ParameterExtractor, TypeBindingExtractor, InitializerExtractor, ClassNameLookup, ConstructorBindingScanner, ForLoopExtractor, PendingAssignmentExtractor, PatternBindingExtractor } from './types.js';
+import type { LanguageTypeConfig, ParameterExtractor, TypeBindingExtractor, InitializerExtractor, ClassNameLookup, ConstructorBindingScanner, ForLoopExtractor, PendingAssignmentExtractor, PatternBindingExtractor, LiteralTypeInferrer, ConstructorTypeDetector } from './types.js';
 import { extractSimpleTypeName, extractVarName, findChildByType, extractGenericTypeArgs, resolveIterableElementType, methodToTypeArgPosition, extractElementTypeFromString, type TypeArgPosition } from './shared.js';
 
 // ── Java ──────────────────────────────────────────────────────────────────
@@ -268,6 +268,38 @@ const extractJavaPatternBinding: PatternBindingExtractor = (node) => {
   return { varName, typeName };
 };
 
+/** Infer the type of a literal AST node for Java/Kotlin overload disambiguation. */
+const inferJvmLiteralType: LiteralTypeInferrer = (node) => {
+  switch (node.type) {
+    case 'decimal_integer_literal':
+    case 'integer_literal':
+    case 'hex_integer_literal':
+    case 'octal_integer_literal':
+    case 'binary_integer_literal':
+      // Check for long suffix
+      if (node.text.endsWith('L') || node.text.endsWith('l')) return 'long';
+      return 'int';
+    case 'decimal_floating_point_literal':
+    case 'real_literal':
+      if (node.text.endsWith('f') || node.text.endsWith('F')) return 'float';
+      return 'double';
+    case 'string_literal':
+    case 'line_string_literal':
+    case 'multi_line_string_literal':
+      return 'String';
+    case 'character_literal':
+      return 'char';
+    case 'true':
+    case 'false':
+    case 'boolean_literal':
+      return 'boolean';
+    case 'null_literal':
+      return 'null';
+    default:
+      return undefined;
+  }
+};
+
 export const javaTypeConfig: LanguageTypeConfig = {
   declarationNodeTypes: JAVA_DECLARATION_NODE_TYPES,
   forLoopNodeTypes: JAVA_FOR_LOOP_NODE_TYPES,
@@ -279,6 +311,7 @@ export const javaTypeConfig: LanguageTypeConfig = {
   extractForLoopBinding: extractJavaForLoopBinding,
   extractPendingAssignment: extractJavaPendingAssignment,
   extractPatternBinding: extractJavaPatternBinding,
+  inferLiteralType: inferJvmLiteralType,
 };
 
 // ── Kotlin ────────────────────────────────────────────────────────────────
@@ -351,26 +384,30 @@ const extractKotlinParameter: ParameterExtractor = (node: SyntaxNode, env: Map<s
   if (varName && typeName) env.set(varName, typeName);
 };
 
+/** Find the constructor callee name in a Kotlin property_declaration's initializer.
+ *  Returns the class name if the callee is a verified class constructor, undefined otherwise. */
+const findKotlinConstructorCallee = (node: SyntaxNode, classNames: ClassNameLookup): string | undefined => {
+  if (node.type !== 'property_declaration') return undefined;
+  const value = node.childForFieldName('value')
+    ?? findChildByType(node, 'call_expression');
+  if (!value || value.type !== 'call_expression') return undefined;
+  const callee = value.firstNamedChild;
+  if (!callee || callee.type !== 'simple_identifier') return undefined;
+  const calleeName = callee.text;
+  if (!calleeName || !classNames.has(calleeName)) return undefined;
+  return calleeName;
+};
+
 /** Kotlin: val user = User() — infer type from call_expression when callee is a known class.
  *  Kotlin constructors are syntactically identical to function calls, so we verify
  *  against classNames (which may include cross-file SymbolTable lookups). */
 const extractKotlinInitializer: InitializerExtractor = (node: SyntaxNode, env: Map<string, string>, classNames: ClassNameLookup): void => {
-  if (node.type !== 'property_declaration') return;
   // Skip if there's an explicit type annotation — Tier 0 already handled it
   const varDecl = findChildByType(node, 'variable_declaration');
   if (varDecl && findChildByType(varDecl, 'user_type')) return;
 
-  // Get the initializer value — the call_expression after '='
-  const value = node.childForFieldName('value')
-    ?? findChildByType(node, 'call_expression');
-  if (!value || value.type !== 'call_expression') return;
-
-  // The callee is the first child of call_expression (simple_identifier for direct calls)
-  const callee = value.firstNamedChild;
-  if (!callee || callee.type !== 'simple_identifier') return;
-
-  const calleeName = callee.text;
-  if (!calleeName || !classNames.has(calleeName)) return;
+  const calleeName = findKotlinConstructorCallee(node, classNames);
+  if (!calleeName) return;
 
   // Extract the variable name from the variable_declaration inside property_declaration
   const nameNode = varDecl
@@ -380,6 +417,14 @@ const extractKotlinInitializer: InitializerExtractor = (node: SyntaxNode, env: M
 
   const varName = extractVarName(nameNode);
   if (varName) env.set(varName, calleeName);
+};
+
+/** Kotlin: detect constructor type from call_expression in typed declarations.
+ *  Unlike extractKotlinInitializer (which SKIPS typed declarations), this detects
+ *  the constructor type EVEN when a type annotation exists, enabling virtual dispatch
+ *  for patterns like `val a: Animal = Dog()`. */
+const detectKotlinConstructorType: ConstructorTypeDetector = (node, classNames) => {
+  return findKotlinConstructorCallee(node, classNames);
 };
 
 /** Kotlin: val x = User(...) — constructor binding for property_declaration with call_expression */
@@ -739,4 +784,6 @@ export const kotlinTypeConfig: LanguageTypeConfig = {
   extractForLoopBinding: extractKotlinForLoopBinding,
   extractPendingAssignment: extractKotlinPendingAssignment,
   extractPatternBinding: extractKotlinPatternBinding,
+  inferLiteralType: inferJvmLiteralType,
+  detectConstructorType: detectKotlinConstructorType,
 };

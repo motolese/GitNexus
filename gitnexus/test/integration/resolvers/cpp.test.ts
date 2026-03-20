@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import {
-  FIXTURES, getRelationships, getNodesByLabel, edgeSet,
+  FIXTURES, getRelationships, getNodesByLabel, getNodesByLabelFull, edgeSet,
   runPipelineFromRepo, type PipelineResult,
 } from './helpers.js';
 
@@ -1059,5 +1059,79 @@ describe('C++ grandparent method resolution via MRO (Phase B)', () => {
       c.target === 'greet' && c.targetFilePath.includes('A.h'),
     );
     expect(greetCall).toBeDefined();
+  });
+});
+
+// ── Phase P: Overload Disambiguation via Parameter Types ─────────────────
+
+describe('C++ overload disambiguation by parameter types', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-overload-param-types'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects lookup method with parameterTypes on graph node', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const lookupNodes = methods.filter(m => m.name === 'lookup');
+    expect(lookupNodes.length).toBe(1);
+    expect(lookupNodes[0].properties.parameterTypes).toEqual(['int']);
+  });
+
+  it('emits CALLS edge from run() → lookup() via overload disambiguation', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const lookupCalls = calls.filter(c => c.source === 'run' && c.target === 'lookup');
+    // Both lookup(42) and lookup("alice") resolve to same nodeId → 1 CALLS edge
+    expect(lookupCalls.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C++ smart pointer virtual dispatch via std::make_shared<T>()
+// ---------------------------------------------------------------------------
+
+describe('C++ smart pointer virtual dispatch via make_shared', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-smart-ptr-dispatch'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Dog and Animal classes', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('Animal');
+    expect(getNodesByLabel(result, 'Class')).toContain('Dog');
+  });
+
+  it('emits CALLS edge from process → speak', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const speakCall = calls.find(c => c.source === 'process' && c.target === 'speak');
+    expect(speakCall).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C++ default parameter arity resolution
+// ---------------------------------------------------------------------------
+
+describe('C++ default parameter arity resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-default-params'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves greet("Alice") with 1 arg to greet with 2 params (1 default)', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const greetCalls = calls.filter(c => c.source === 'process' && c.target === 'greet');
+    expect(greetCalls.length).toBe(1);
   });
 });

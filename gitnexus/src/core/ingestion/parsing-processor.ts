@@ -84,6 +84,8 @@ const processParsingWithWorkers = async (
     for (const sym of result.symbols) {
       symbolTable.add(sym.filePath, sym.name, sym.nodeId, sym.type, {
         parameterCount: sym.parameterCount,
+        requiredParameterCount: sym.requiredParameterCount,
+        parameterTypes: sym.parameterTypes,
         returnType: sym.returnType,
         declaredType: sym.declaredType,
         ownerId: sym.ownerId,
@@ -284,6 +286,8 @@ const processParsingSequential = async (
           } : {}),
           ...(methodSig ? {
             parameterCount: methodSig.parameterCount,
+            ...(methodSig.requiredParameterCount !== undefined ? { requiredParameterCount: methodSig.requiredParameterCount } : {}),
+            ...(methodSig.parameterTypes ? { parameterTypes: methodSig.parameterTypes } : {}),
             returnType: methodSig.returnType,
           } : {}),
         },
@@ -303,6 +307,8 @@ const processParsingSequential = async (
 
       symbolTable.add(file.path, nodeName, nodeId, nodeLabel, {
         parameterCount: methodSig?.parameterCount,
+        requiredParameterCount: methodSig?.requiredParameterCount,
+        parameterTypes: methodSig?.parameterTypes,
         returnType: methodSig?.returnType,
         declaredType,
         ownerId: enclosingClassId ?? undefined,

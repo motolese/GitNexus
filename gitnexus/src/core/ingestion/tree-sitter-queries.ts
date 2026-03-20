@@ -19,6 +19,10 @@ export const TYPESCRIPT_QUERIES = `
 (function_declaration
   name: (identifier) @name) @definition.function
 
+; TypeScript overload signatures (function_signature is a separate node type from function_declaration)
+(function_signature
+  name: (identifier) @name) @definition.function
+
 (method_definition
   name: (property_identifier) @name) @definition.method
 
@@ -424,6 +428,20 @@ export const CPP_QUERIES = `
   (function_definition
     declarator: (function_declarator
       declarator: [(field_identifier) (identifier) (operator_name) (destructor_name)] @name)) @definition.method)
+
+; Inline class methods returning a pointer type (User* lookup(int id) { ... })
+(field_declaration_list
+  (function_definition
+    declarator: (pointer_declarator
+      declarator: (function_declarator
+        declarator: [(field_identifier) (identifier) (operator_name)] @name))) @definition.method)
+
+; Inline class methods returning a reference type (User& lookup(int id) { ... })
+(field_declaration_list
+  (function_definition
+    declarator: (reference_declarator
+      (function_declarator
+        declarator: [(field_identifier) (identifier) (operator_name)] @name))) @definition.method)
 
 ; Templates
 (template_declaration (class_specifier name: (type_identifier) @name)) @definition.template

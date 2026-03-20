@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import {
-  FIXTURES, getRelationships, getNodesByLabel, edgeSet,
+  FIXTURES, getRelationships, getNodesByLabel, getNodesByLabelFull, edgeSet,
   runPipelineFromRepo, type PipelineResult,
 } from './helpers.js';
 
@@ -1467,5 +1467,53 @@ describe('C# null-check narrowing resolution (Phase C)', () => {
       c.target === 'Save' && c.source === 'ProcessInLambda' && c.targetFilePath.includes('User'),
     );
     expect(saveCall).toBeDefined();
+  });
+});
+
+// ── Phase P: Overload Disambiguation via Parameter Types ─────────────────
+
+describe('C# overload disambiguation by parameter types', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-overload-param-types'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Lookup method with parameterTypes on graph node', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const lookupNodes = methods.filter(m => m.name === 'Lookup');
+    expect(lookupNodes.length).toBe(1);
+    expect(lookupNodes[0].properties.parameterTypes).toEqual(['int']);
+  });
+
+  it('emits CALLS edge from Run() → Lookup() via overload disambiguation', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const lookupCalls = calls.filter(c => c.source === 'Run' && c.target === 'Lookup');
+    // Both Lookup(42) and Lookup("alice") resolve to same nodeId → 1 CALLS edge
+    expect(lookupCalls.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C# optional parameter arity resolution
+// ---------------------------------------------------------------------------
+
+describe('C# optional parameter arity resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-optional-params'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves g.Greet("Alice") with 1 arg to Greet with 2 params (1 optional)', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const greetCalls = calls.filter(c => c.source === 'Main' && c.target === 'Greet');
+    expect(greetCalls.length).toBe(1);
   });
 });
