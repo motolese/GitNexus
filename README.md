@@ -91,11 +91,16 @@ To configure MCP for your editor, run `npx gitnexus setup` once — or set it up
 
 > **Claude Code** gets the deepest integration: MCP tools + agent skills + PreToolUse hooks that enrich searches with graph context + PostToolUse hooks that auto-reindex after commits.
 
-### Community Integrations
+## Community Integrations
 
-| Agent | Install | Source |
-|-------|---------|--------|
-| [pi](https://pi.dev) | `pi install npm:pi-gitnexus` | [pi-gitnexus](https://github.com/tintinweb/pi-gitnexus) |
+Built by the community — not officially maintained, but worth checking out.
+
+| Project | Author | Description |
+|---------|--------|-------------|
+| [pi-gitnexus](https://github.com/tintinweb/pi-gitnexus) | [@tintinweb](https://github.com/tintinweb) | GitNexus plugin for [pi](https://pi.dev) — `pi install npm:pi-gitnexus` |
+| [gitnexus-stable-ops](https://github.com/ShunsukeHayashi/gitnexus-stable-ops) | [@ShunsukeHayashi](https://github.com/ShunsukeHayashi) | Stable ops & deployment workflows (Miyabi ecosystem) |
+
+> Have a project built on GitNexus? Open a PR to add it here!
 
 If you prefer manual configuration:
 
