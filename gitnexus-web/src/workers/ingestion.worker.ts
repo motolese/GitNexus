@@ -19,6 +19,7 @@ import { enrichClustersBatch, ClusterMemberInfo, ClusterEnrichment } from '../co
 import { CommunityNode } from '../core/ingestion/community-processor';
 import { PipelineResult } from '../types/pipeline';
 import { buildCodebaseContext, type CodebaseContext } from '../core/llm/context-builder';
+import { hydrateSerializedServerGraph } from './server-graph-hydration';
 import { 
   buildBM25Index, 
   searchBM25, 
@@ -343,14 +344,7 @@ const workerApi = {
   },
 
   async hydrateServerGraph(serialized: SerializablePipelineResult): Promise<void> {
-    const graph = createKnowledgeGraph();
-    serialized.nodes.forEach((node) => graph.addNode(node));
-    serialized.relationships.forEach((relationship) => graph.addRelationship(relationship));
-
-    await loadResultIntoWorkerState({
-      graph,
-      fileContents: new Map(Object.entries(serialized.fileContents)),
-    });
+    await hydrateSerializedServerGraph(serialized, loadResultIntoWorkerState);
   },
 
   // ============================================================

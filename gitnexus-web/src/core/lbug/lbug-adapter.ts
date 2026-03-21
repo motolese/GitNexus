@@ -16,6 +16,7 @@ import {
   NodeTableName,
 } from './schema';
 import { generateAllCSVs } from './csv-generator';
+import { getQueryRows } from './query-result';
 
 // Holds the reference to the dynamically loaded module
 let lbug: any = null;
@@ -228,20 +229,6 @@ const BACKTICK_TABLES = new Set([
 
 const escapeTableName = (table: string): string => {
   return BACKTICK_TABLES.has(table) ? `\`${table}\`` : table;
-};
-
-const getQueryRows = async (result: any): Promise<any[]> => {
-  if (!result) return [];
-  if (typeof result.getAllObjects === 'function') {
-    return await result.getAllObjects();
-  }
-  if (typeof result.getAllRows === 'function') {
-    return await result.getAllRows();
-  }
-  if (typeof result.getAll === 'function') {
-    return await result.getAll();
-  }
-  throw new Error('Unsupported LadybugDB QueryResult shape');
 };
 
 /** Tables with isExported column (TypeScript/JS-native types) */
