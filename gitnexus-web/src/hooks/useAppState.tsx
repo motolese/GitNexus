@@ -123,6 +123,7 @@ interface AppState {
   // Worker API (shared across app)
   runPipeline: (file: File, onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
   runPipelineFromFiles: (files: FileEntry[], onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
+  hydrateServerGraph: (result: ConnectToServerResult) => Promise<void>;
   runQuery: (cypher: string) => Promise<any[]>;
   isDatabaseReady: () => Promise<boolean>;
   hydrateWorkerFromServer: (nodes: any[], relationships: any[], fileContents: Record<string, string>) => Promise<void>;
@@ -465,6 +466,16 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     const proxiedOnProgress = Comlink.proxy(onProgress);
     const serializedResult = await api.runPipelineFromFiles(files, proxiedOnProgress, clusteringConfig);
     return deserializePipelineResult(serializedResult, createKnowledgeGraph);
+  }, []);
+
+  const hydrateServerGraph = useCallback(async (result: ConnectToServerResult): Promise<void> => {
+    const api = apiRef.current;
+    if (!api) throw new Error('Worker not initialized');
+    await api.hydrateServerGraph({
+      nodes: result.nodes,
+      relationships: result.relationships,
+      fileContents: result.fileContents,
+    });
   }, []);
 
   const runQuery = useCallback(async (cypher: string): Promise<any[]> => {
@@ -1028,6 +1039,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       for (const [p, c] of Object.entries(result.fileContents)) fileMap.set(p, c);
       setFileContents(fileMap);
 
+      await hydrateServerGraph(result);
+
       setViewMode('exploring');
       setProgress(null);
 
@@ -1056,7 +1069,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       });
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, 3000);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, hydrateWorkerFromServer, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, hydrateServerGraph, hydrateWorkerFromServer, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   const removeCodeReference = useCallback((id: string) => {
     setCodeReferences(prev => {
@@ -1159,6 +1172,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     switchRepo,
     runPipeline,
     runPipelineFromFiles,
+    hydrateServerGraph,
     runQuery,
     isDatabaseReady,
     hydrateWorkerFromServer,
