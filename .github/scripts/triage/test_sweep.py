@@ -33,6 +33,7 @@ from sweep import (
     REPORT_LABEL,
     API_PAGE_SIZE,
     MIN_SAMPLES_FOR_OUTLIER_DETECTION,
+    PCA_MAX_COMPONENTS,
 )
 
 
@@ -80,6 +81,17 @@ class TestGithubApiGet:
         with pytest.raises(SystemExit) as exc_info:
             github_api_get("/issues")
         assert exc_info.value.code == 1
+
+
+class TestConstants:
+    """Tests for module-level constants."""
+
+    def test_min_samples_is_at_least_3x_pca_max(self):
+        """MIN_SAMPLES must be >= 3 * PCA_MAX_COMPONENTS for reliable covariance."""
+        assert MIN_SAMPLES_FOR_OUTLIER_DETECTION >= 3 * PCA_MAX_COMPONENTS
+
+    def test_min_samples_is_100(self):
+        assert MIN_SAMPLES_FOR_OUTLIER_DETECTION == 100
 
 
 class TestFetchAllOpenItems:
@@ -164,7 +176,7 @@ class TestGenerateReport:
         assert "0 outliers flagged" in report
         assert "0 duplicate pairs found" in report
 
-    def test_with_outliers(self):
+    def test_with_outliers_shows_distance(self):
         items = [
             TriageItem(
                 number=10, title="Spam Issue", html_url="https://example.com/10",
@@ -175,9 +187,10 @@ class TestGenerateReport:
                 is_pr=False, labels=[], created_at="2026-01-01", text="good",
             ),
         ]
-        report = generate_report(items, [0], [])
+        report = generate_report(items, [(0, 12.34)], [])
         assert "#10" in report
         assert "Spam Issue" in report
+        assert "12.34" in report
         assert "1 outliers flagged" in report
 
     def test_with_duplicates(self):
@@ -204,7 +217,7 @@ class TestGenerateReport:
                 is_pr=True, labels=[], created_at="2026-01-01", text="pr",
             ),
         ]
-        report = generate_report(items, [0], [])
+        report = generate_report(items, [(0, 8.5)], [])
         assert "| PR |" in report
 
     def test_footer_present(self):
@@ -295,6 +308,27 @@ class TestFetchRepoLabels:
         labels = fetch_repo_labels()
         assert labels[0]["text"] == "wontfix"
 
+    @patch("sweep.API_PAGE_SIZE", 2)
+    @patch("sweep.github_api_get")
+    def test_label_pagination(self, mock_get):
+        """Repos with more labels than one page should fetch all pages."""
+        mock_get.side_effect = [
+            # First page: full (2 items = API_PAGE_SIZE)
+            [
+                {"name": "bug", "description": "Broken"},
+                {"name": "feature", "description": "New"},
+            ],
+            # Second page: partial (1 item < API_PAGE_SIZE) -> stop
+            [
+                {"name": "docs", "description": "Documentation"},
+            ],
+        ]
+        labels = fetch_repo_labels()
+        assert len(labels) == 3
+        assert mock_get.call_count == 2
+        assert labels[0]["name"] == "bug"
+        assert labels[2]["name"] == "docs"
+
 
 class TestApplyLabelsToItem:
     """Tests for apply_labels_to_item."""
@@ -332,7 +366,7 @@ class TestApplyLabelsToItem:
 class TestGenerateReportWithLabels:
     """Tests for label suggestions in the report."""
 
-    def test_report_includes_label_section(self):
+    def test_report_includes_label_section_with_top1_only(self):
         items = [
             TriageItem(
                 number=1, title="Fix crash", html_url="https://example.com/1",
@@ -342,7 +376,9 @@ class TestGenerateReportWithLabels:
         suggestions = [[("bug", 0.85), ("enhancement", 0.42)]]
         report = generate_report(items, [], [], label_suggestions=suggestions)
         assert "Suggested Labels" in report
+        # Only the top-1 label should appear in the report
         assert "`bug` (0.85)" in report
+        assert "`enhancement`" not in report
         assert "1 items suggested for labeling" in report
 
     def test_report_skips_already_labeled_items(self):
@@ -369,11 +405,11 @@ class TestGenerateReportWithLabels:
             ),
         ]
         suggestions = [[("bug", 0.85)], [("bug", 0.90)]]
-        # Item 0 is an outlier — should be excluded from label suggestions
-        report = generate_report(items, [0], [], label_suggestions=suggestions)
+        # Item 0 is an outlier (with distance) — should be excluded from label suggestions
+        report = generate_report(items, [(0, 15.2)], [], label_suggestions=suggestions)
         assert "1 unlabeled items" in report  # only item 2
         assert "#2" in report
-        # Item 1 (outlier) should NOT be in the suggestions table
+        # Item 0 (outlier) should NOT be in the suggestions table
         assert "Spam garbage" not in report.split("Suggested Labels")[1]
 
     def test_report_without_label_suggestions(self):
@@ -425,22 +461,23 @@ class TestMain:
         mock_outliers, mock_dupes, mock_suggest, mock_write, mock_create,
     ):
         """Test the full flow with >= MIN_SAMPLES items (outlier detection runs)."""
+        n = MIN_SAMPLES_FOR_OUTLIER_DETECTION
         items = [
             TriageItem(
                 number=i, title=f"Item {i}", html_url=f"https://example.com/{i}",
                 is_pr=False, labels=[], created_at="2026-01-01", text=f"text {i}",
             )
-            for i in range(15)
+            for i in range(n)
         ]
         mock_fetch.return_value = items
         mock_labels.return_value = [
             RepoLabel(name="bug", description="Something broken", text="bug: Something broken"),
         ]
 
-        embeddings = np.random.randn(15, 384).astype(np.float32)
+        embeddings = np.random.randn(n, 384).astype(np.float32)
         mock_embed.return_value = embeddings
         mock_norm.return_value = embeddings
-        mock_reduce.return_value = np.random.randn(15, 10).astype(np.float32)
+        mock_reduce.return_value = np.random.randn(n, 10).astype(np.float32)
 
         main()
 
@@ -470,17 +507,18 @@ class TestMain:
         self, mock_fetch, mock_labels, mock_embed, mock_norm, mock_reduce,
         mock_outliers, mock_dupes, mock_suggest, mock_write, mock_create,
     ):
-        """With < MIN_SAMPLES items, outlier detection should be skipped."""
+        """With < MIN_SAMPLES (150) items, outlier detection should be skipped."""
+        n = MIN_SAMPLES_FOR_OUTLIER_DETECTION - 1  # 149
         items = [
             TriageItem(
                 number=i, title=f"Item {i}", html_url=f"https://example.com/{i}",
                 is_pr=False, labels=[], created_at="2026-01-01", text=f"text {i}",
             )
-            for i in range(5)
+            for i in range(n)
         ]
         mock_fetch.return_value = items
 
-        embeddings = np.random.randn(5, 384).astype(np.float32)
+        embeddings = np.random.randn(n, 384).astype(np.float32)
         mock_embed.return_value = embeddings
         mock_norm.return_value = embeddings
 
@@ -585,26 +623,27 @@ class TestMain:
         mock_outliers, mock_dupes, mock_suggest, mock_apply, mock_write, mock_create,
     ):
         """Items flagged as outliers should not receive label suggestions."""
+        n = MIN_SAMPLES_FOR_OUTLIER_DETECTION
         items = [
             TriageItem(
                 number=i, title=f"Item {i}", html_url=f"https://example.com/{i}",
                 is_pr=False, labels=[], created_at="2026-01-01", text=f"text {i}",
             )
-            for i in range(15)
+            for i in range(n)
         ]
         mock_fetch.return_value = items
         mock_labels.return_value = [
             RepoLabel(name="bug", description="Broken", text="bug: Broken"),
         ]
-        # Outlier detection flags items 0 and 5
-        mock_outliers.return_value = [0, 5]
+        # Outlier detection flags items 0 and 5 (now returns tuples with distances)
+        mock_outliers.return_value = [(0, 12.5), (5, 15.3)]
         # Every item gets a suggestion
-        mock_suggest.return_value = [[("bug", 0.85)] for _ in range(15)]
+        mock_suggest.return_value = [[("bug", 0.85)] for _ in range(n)]
 
-        embeddings = np.random.randn(15, 384).astype(np.float32)
+        embeddings = np.random.randn(n, 384).astype(np.float32)
         mock_embed.return_value = embeddings
         mock_norm.return_value = embeddings
-        mock_reduce.return_value = np.random.randn(15, 10).astype(np.float32)
+        mock_reduce.return_value = np.random.randn(n, 10).astype(np.float32)
 
         main()
 
@@ -612,5 +651,5 @@ class TestMain:
         labeled_numbers = [call.args[0] for call in mock_apply.call_args_list]
         assert 0 not in labeled_numbers
         assert 5 not in labeled_numbers
-        # Other items should be labeled (13 items: 15 total - 2 outliers)
-        assert mock_apply.call_count == 13
+        # Other items should be labeled (n - 2 outliers)
+        assert mock_apply.call_count == n - 2

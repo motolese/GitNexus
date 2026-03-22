@@ -3,13 +3,19 @@ name: Triage Sweep
 on:
   workflow_dispatch:
     inputs:
-      mahalanobis_threshold:
+      outlier_percentile:
         description: >-
-          Mahalanobis distance threshold for outlier detection.
-          Items with distance above this are flagged as potential spam/noise.
+          Chi2 percentile for dimension-aware outlier cutoff (0-1).
+          0.997 is the multivariate equivalent of 3-sigma.
           Lower = more aggressive flagging.
         type: number
-        default: 3.0
+        default: 0.997
+      contamination:
+        description: >-
+          Expected fraction of outliers in the data (0-0.5).
+          Controls how aggressively EllipticEnvelope downweights extremes.
+        type: number
+        default: 0.1
       cosine_threshold:
         description: >-
           Cosine similarity threshold for duplicate detection.
@@ -71,7 +77,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          INPUT_MAHALANOBIS_THRESHOLD: ${{ inputs.mahalanobis_threshold }}
+          INPUT_OUTLIER_PERCENTILE: ${{ inputs.outlier_percentile }}
+          INPUT_CONTAMINATION: ${{ inputs.contamination }}
           INPUT_COSINE_THRESHOLD: ${{ inputs.cosine_threshold }}
           INPUT_MAX_ITEMS: ${{ inputs.max_items }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}

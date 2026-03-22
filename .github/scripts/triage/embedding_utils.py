@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 from fastembed import TextEmbedding
+from scipy.stats import chi2
 from sklearn.decomposition import PCA
 from sklearn.covariance import EllipticEnvelope
 from sklearn.metrics.pairwise import cosine_similarity
@@ -53,15 +54,12 @@ def normalize_rows(matrix: NDArray[np.float32]) -> NDArray[np.float32]:
 
 def reduce_dimensions(
     matrix: NDArray[np.float32],
-    variance_ratio: float,
     max_components: int,
 ) -> NDArray[np.float32]:
     """Reduce dimensionality via PCA.
 
     Computes n_components = min(max_components, n-1, d). If n_components < 1,
     returns the matrix unchanged. Logs explained variance for observability.
-    The variance_ratio parameter documents intent but is not strictly enforced;
-    the actual retained variance depends on the data and component cap.
     """
     n, d = matrix.shape
     if n <= 1:
@@ -80,25 +78,33 @@ def reduce_dimensions(
 
 def detect_outliers(
     matrix: NDArray[np.float32],
-    threshold: float,
-) -> list[int]:
-    """Flag items whose Mahalanobis distance exceeds the threshold.
+    percentile: float = 0.997,
+    contamination: float = 0.1,
+) -> list[tuple[int, float]]:
+    """Flag items whose Mahalanobis distance exceeds a dimension-aware cutoff.
 
     Uses EllipticEnvelope (robust covariance via MCD) to estimate the
     multivariate Gaussian, then computes sqrt(squared Mahalanobis distance)
-    for each sample. Returns indices of outliers sorted ascending.
+    for each sample. The cutoff is derived from the chi2 distribution with
+    k degrees of freedom (k = number of features), so it scales correctly
+    regardless of dimensionality. Returns (index, distance) tuples sorted
+    by index ascending.
     """
-    n = matrix.shape[0]
+    n, k = matrix.shape
     if n < 2:
         return []
 
-    envelope = EllipticEnvelope(contamination=0.1, random_state=42)
+    envelope = EllipticEnvelope(contamination=contamination, random_state=42)
     envelope.fit(matrix)
 
     # .mahalanobis() returns squared Mahalanobis distances
     distances = np.sqrt(envelope.mahalanobis(matrix))
-    outlier_mask = distances > threshold
-    return list(np.where(outlier_mask)[0])
+
+    # Dimension-aware cutoff: sqrt(chi2.ppf(percentile, df=k))
+    cutoff = np.sqrt(chi2.ppf(percentile, df=k))
+    outlier_mask = distances > cutoff
+    indices = np.where(outlier_mask)[0]
+    return [(int(idx), float(distances[idx])) for idx in indices]
 
 
 def find_duplicate_pairs(
