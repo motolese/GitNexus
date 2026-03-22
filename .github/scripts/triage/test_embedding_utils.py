@@ -107,13 +107,13 @@ class TestReduceDimensions:
 
     def test_single_sample_returns_unchanged(self):
         m = np.random.randn(1, 50).astype(np.float32)
-        result = reduce_dimensions(m, 0.95, 10)
+        result = reduce_dimensions(m, 10)
         np.testing.assert_array_equal(result, m)
 
     def test_reduces_dimensions(self):
         rng = np.random.default_rng(42)
         m = rng.standard_normal((100, 50)).astype(np.float32)
-        result = reduce_dimensions(m, 0.95, 10)
+        result = reduce_dimensions(m, 10)
         assert result.shape == (100, 10)
         assert result.dtype == np.float32
 
@@ -121,20 +121,20 @@ class TestReduceDimensions:
         rng = np.random.default_rng(42)
         # 5 samples, 20 features -> max components = 4 (n-1)
         m = rng.standard_normal((5, 20)).astype(np.float32)
-        result = reduce_dimensions(m, 0.95, 50)
+        result = reduce_dimensions(m, 50)
         assert result.shape == (5, 4)
 
     def test_caps_at_d(self):
         rng = np.random.default_rng(42)
         # 100 samples, 3 features -> max components = 3
         m = rng.standard_normal((100, 3)).astype(np.float32)
-        result = reduce_dimensions(m, 0.95, 50)
+        result = reduce_dimensions(m, 50)
         assert result.shape == (100, 3)
 
     def test_max_components_respected(self):
         rng = np.random.default_rng(42)
         m = rng.standard_normal((50, 30)).astype(np.float32)
-        result = reduce_dimensions(m, 0.95, 5)
+        result = reduce_dimensions(m, 5)
         assert result.shape[1] == 5
 
 
@@ -143,13 +143,13 @@ class TestDetectOutliers:
 
     def test_single_sample_returns_empty(self):
         m = np.random.randn(1, 5).astype(np.float32)
-        result = detect_outliers(m, 3.0)
+        result = detect_outliers(m, percentile=0.997)
         assert result == []
 
     def test_empty_returns_empty(self):
         # n < 2 case
         m = np.empty((0, 5), dtype=np.float32)
-        result = detect_outliers(m, 3.0)
+        result = detect_outliers(m, percentile=0.997)
         assert result == []
 
     def test_finds_outliers_in_synthetic_data(self):
@@ -158,24 +158,50 @@ class TestDetectOutliers:
         cluster = rng.standard_normal((50, 3)).astype(np.float32) * 0.1
         outlier = np.array([[100.0, 100.0, 100.0]], dtype=np.float32)
         m = np.vstack([cluster, outlier])
-        result = detect_outliers(m, 3.0)
+        result = detect_outliers(m, percentile=0.997)
         # The outlier (index 50) should be detected
-        assert 50 in result
+        outlier_indices = [idx for idx, _ in result]
+        assert 50 in outlier_indices
 
-    def test_returns_list_of_ints(self):
+    def test_returns_list_of_index_distance_tuples(self):
         rng = np.random.default_rng(42)
-        m = rng.standard_normal((20, 3)).astype(np.float32)
-        result = detect_outliers(m, 3.0)
+        # Tight cluster + outlier to guarantee at least one result
+        cluster = rng.standard_normal((20, 3)).astype(np.float32) * 0.1
+        far_point = np.array([[50.0, 50.0, 50.0]], dtype=np.float32)
+        m = np.vstack([cluster, far_point])
+        result = detect_outliers(m, percentile=0.997)
         assert isinstance(result, list)
-        for idx in result:
-            assert isinstance(idx, (int, np.integer))
+        for item in result:
+            assert isinstance(item, tuple)
+            assert len(item) == 2
+            idx, dist = item
+            assert isinstance(idx, int)
+            assert isinstance(dist, float)
+            assert dist > 0
 
-    def test_low_threshold_flags_more(self):
+    def test_low_percentile_flags_more(self):
         rng = np.random.default_rng(42)
         m = rng.standard_normal((30, 3)).astype(np.float32)
-        low = detect_outliers(m, 1.0)
-        high = detect_outliers(m, 10.0)
+        low = detect_outliers(m, percentile=0.5)
+        high = detect_outliers(m, percentile=0.999)
         assert len(low) >= len(high)
+
+    def test_dimension_aware_cutoff(self):
+        """High-dimensional data should not flag everything with default percentile."""
+        rng = np.random.default_rng(42)
+        # 500 samples, 10 dims — well-conditioned for robust covariance
+        m = rng.standard_normal((500, 10)).astype(np.float32)
+        result = detect_outliers(m, percentile=0.997)
+        # With a proper dimension-aware cutoff on clean Gaussian data,
+        # only a small fraction should be flagged (well under 50%)
+        assert len(result) < 250
+
+    def test_contamination_parameter(self):
+        rng = np.random.default_rng(42)
+        m = rng.standard_normal((50, 3)).astype(np.float32)
+        # Should not raise with different contamination values
+        result = detect_outliers(m, percentile=0.997, contamination=0.05)
+        assert isinstance(result, list)
 
 
 class TestFindDuplicatePairs:

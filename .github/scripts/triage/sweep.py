@@ -25,9 +25,13 @@ from embedding_utils import (
 
 # ── Thresholds (overridable via workflow_dispatch inputs) ──────────────
 
-# Mahalanobis distance beyond which an item is flagged as an outlier.
-# Default 3.0 ~ 99.7% of a Gaussian distribution (3-sigma rule).
-MAHALANOBIS_THRESHOLD: float = float(os.environ.get("INPUT_MAHALANOBIS_THRESHOLD", "3.0"))
+# Chi2 percentile for the dimension-aware outlier cutoff.
+# 0.997 is the multivariate equivalent of the 3-sigma rule.
+OUTLIER_PERCENTILE: float = float(os.environ.get("INPUT_OUTLIER_PERCENTILE", "0.997"))
+
+# EllipticEnvelope contamination: expected fraction of outliers in the data.
+# Governs how aggressively the robust covariance downweights extreme points.
+CONTAMINATION: float = float(os.environ.get("INPUT_CONTAMINATION", "0.1"))
 
 # Cosine similarity above which two items are flagged as duplicates.
 # 0.92 catches near-identical issues while tolerating paraphrasing.
@@ -42,18 +46,10 @@ DRY_RUN: bool = os.environ.get("INPUT_DRY_RUN", "false").lower() == "true"
 # ── Fixed constants (not user-configurable) ───────────────────────────
 
 # Minimum number of samples required for EllipticEnvelope to fit
-# a Gaussian. Below this, outlier detection is skipped because
-# covariance estimation is unreliable.
-MIN_SAMPLES_FOR_OUTLIER_DETECTION: int = 10
-
-# PCA: retain components explaining this fraction of variance.
-# 0.95 keeps 95% of information while reducing dimensionality enough
-# for EllipticEnvelope to be numerically stable.
-PCA_VARIANCE_RATIO: float = 0.95
-
-# PCA: maximum number of components regardless of variance ratio.
-# Caps dimensionality for EllipticEnvelope's n_samples > n_features^2 rule.
-PCA_MAX_COMPONENTS: int = 50
+# a Gaussian reliably. Must be >= 3 * PCA_MAX_COMPONENTS so the
+# covariance matrix is estimated from enough data points.
+PCA_MAX_COMPONENTS: int = 33
+MIN_SAMPLES_FOR_OUTLIER_DETECTION: int = 100
 
 # GitHub REST API page size (max allowed is 100).
 API_PAGE_SIZE: int = 100
@@ -152,19 +148,27 @@ class RepoLabel(TypedDict):
 
 
 def fetch_repo_labels() -> list[RepoLabel]:
-    """Fetch all labels from the repository.
+    """Fetch all labels from the repository, paginating if needed.
 
     Returns labels with name, description, and a text field suitable
     for embedding ("name: description"). Labels with no description
     use just the name.
     """
-    data = github_api_get("/labels?per_page=100")
     labels: list[RepoLabel] = []
-    for raw in data:
-        name = raw["name"]
-        desc = raw.get("description", "") or ""
-        text = f"{name}: {desc}" if desc else name
-        labels.append(RepoLabel(name=name, description=desc, text=text))
+    page = 1
+
+    while True:
+        data = github_api_get(f"/labels?per_page={API_PAGE_SIZE}&page={page}")
+        for raw in data:
+            name = raw["name"]
+            desc = raw.get("description", "") or ""
+            text = f"{name}: {desc}" if desc else name
+            labels.append(RepoLabel(name=name, description=desc, text=text))
+
+        if len(data) < API_PAGE_SIZE:
+            break
+        page += 1
+
     return labels
 
 
@@ -199,7 +203,7 @@ def apply_labels_to_item(item_number: int, labels: list[str]) -> None:
 
 def generate_report(
     items: list[TriageItem],
-    outlier_indices: list[int],
+    outlier_results: list[tuple[int, float]],
     duplicate_pairs: list[tuple[int, int, float]],
     label_suggestions: list[list[tuple[str, float]]] | None = None,
 ) -> str:
@@ -212,24 +216,24 @@ def generate_report(
         "",
         f"**Run:** {now} UTC",
         f"**Items analyzed:** {len(items)}",
-        f"**Thresholds:** Mahalanobis > {MAHALANOBIS_THRESHOLD}, Cosine > {COSINE_THRESHOLD}",
+        f"**Thresholds:** Outlier percentile {OUTLIER_PERCENTILE}, Cosine > {COSINE_THRESHOLD}",
         "",
-        f"### Potential Outliers / Spam ({len(outlier_indices)})",
+        f"### Potential Outliers / Spam ({len(outlier_results)})",
         "",
         "Items with unusually high Mahalanobis distance from the distribution center.",
         "These may be spam, off-topic, or poorly described.",
         "",
     ]
 
-    if outlier_indices:
+    if outlier_results:
         lines.append("| # | Type | Title | Distance |")
         lines.append("|---|------|-------|----------|")
-        for idx in outlier_indices:
+        for idx, distance in outlier_results:
             item = items[idx]
             kind = "PR" if item["is_pr"] else "Issue"
             lines.append(
                 f"| [#{item['number']}]({item['html_url']}) "
-                f"| {kind} | {item['title']} | flagged |"
+                f"| {kind} | {item['title']} | {distance:.2f} |"
             )
     else:
         lines.append("None found.")
@@ -259,11 +263,12 @@ def generate_report(
         lines.append("None found.")
 
     # ── Label suggestions section ────────────────────────────────────
-    outlier_set = set(outlier_indices)
+    outlier_set = {idx for idx, _ in outlier_results}
     if label_suggestions is not None:
         # Only unlabeled, non-outlier items — spam shouldn't get categorized
+        # Show only the top-1 label to match what actually gets applied
         items_with_suggestions = [
-            (i, sugs) for i, sugs in enumerate(label_suggestions)
+            (i, sugs[:1]) for i, sugs in enumerate(label_suggestions)
             if sugs and not items[i]["labels"] and i not in outlier_set
         ]
         lines.extend([
@@ -276,8 +281,8 @@ def generate_report(
         ])
 
         if items_with_suggestions:
-            lines.append("| # | Type | Title | Suggested Labels |")
-            lines.append("|---|------|-------|-----------------|")
+            lines.append("| # | Type | Title | Suggested Label |")
+            lines.append("|---|------|-------|--------------------|")
             for idx, sugs in items_with_suggestions:
                 item = items[idx]
                 kind = "PR" if item["is_pr"] else "Issue"
@@ -293,7 +298,7 @@ def generate_report(
         "",
         "### Summary",
         "",
-        f"- {len(outlier_indices)} outliers flagged for review",
+        f"- {len(outlier_results)} outliers flagged for review",
         f"- {len(duplicate_pairs)} duplicate pairs found",
         f"- {len(items)} items analyzed in total",
     ])
@@ -385,10 +390,12 @@ def main() -> None:
     embeddings = normalize_rows(embeddings)
 
     # 6. Outlier detection (Mahalanobis via EllipticEnvelope)
-    outlier_indices: list[int] = []
+    outlier_results: list[tuple[int, float]] = []
     if len(items) >= MIN_SAMPLES_FOR_OUTLIER_DETECTION:
-        reduced = reduce_dimensions(embeddings, PCA_VARIANCE_RATIO, PCA_MAX_COMPONENTS)
-        outlier_indices = detect_outliers(reduced, MAHALANOBIS_THRESHOLD)
+        reduced = reduce_dimensions(embeddings, PCA_MAX_COMPONENTS)
+        outlier_results = detect_outliers(
+            reduced, percentile=OUTLIER_PERCENTILE, contamination=CONTAMINATION,
+        )
     else:
         print(
             f"Skipping outlier detection: {len(items)} items < "
@@ -411,7 +418,7 @@ def main() -> None:
 
         # Apply top label to unlabeled items (unless dry run)
         # Skip outliers — flagged items shouldn't get categorized
-        outlier_set = set(outlier_indices)
+        outlier_set = {idx for idx, _ in outlier_results}
         if not DRY_RUN:
             applied_count = 0
             for i, sugs in enumerate(label_suggestions):
@@ -424,7 +431,7 @@ def main() -> None:
         print("No repo labels found — skipping label suggestions")
 
     # 9. Generate report
-    report = generate_report(items, outlier_indices, duplicate_pairs, label_suggestions)
+    report = generate_report(items, outlier_results, duplicate_pairs, label_suggestions)
 
     # 10. Write report to file (for summary step)
     write_report(report)
