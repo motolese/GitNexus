@@ -106,10 +106,23 @@ export const loadGraphToLbug = async (
   }
   const { lbug: lbugModule } = await initLbug();
 
+  // Close previous connection/database to avoid leaking WASM resources across repo switches
+  if (conn) {
+    try { await conn.close(); } catch {}
+    conn = null;
+  }
+  if (db) {
+    try { await db.close(); } catch {}
+    db = null;
+  }
+
   // Recreate a fresh in-memory DB each load to avoid cleanup/quoting issues with reserved names
   const BUFFER_POOL_SIZE = 512 * 1024 * 1024; // 512MB (mirror init)
   db = new lbugModule.Database(':memory:', BUFFER_POOL_SIZE);
   conn = new lbugModule.Connection(db);
+
+  // Update initPromise so subsequent initLbug() calls return the fresh db/conn
+  initPromise = Promise.resolve({ db, conn, lbug: lbugModule });
 
   // Re-run schema creation
   for (let i = 0; i < SCHEMA_QUERIES.length; i++) {
@@ -272,7 +285,7 @@ export const loadGraphToLbug = async (
     let totalNodes = 0;
     for (const tableName of NODE_TABLES) {
       try {
-        const countRes = await conn.query(`MATCH (n:${tableName}) RETURN count(n) AS cnt`);
+        const countRes = await conn.query(`MATCH (n:${escapeTableName(tableName)}) RETURN count(n) AS cnt`);
         const countRows = await countRes.getAllRows();
         const countRow = countRows[0];
         const count = countRow ? (countRow.cnt ?? countRow[0] ?? 0) : 0;
@@ -430,7 +443,7 @@ export const getLbugStats = async (): Promise<{ nodes: number; edges: number }> 
     let totalNodes = 0;
     for (const tableName of NODE_TABLES) {
       try {
-        const nodeResult = await conn.query(`MATCH (n:${tableName}) RETURN count(n) AS cnt`);
+        const nodeResult = await conn.query(`MATCH (n:${escapeTableName(tableName)}) RETURN count(n) AS cnt`);
         const nodeRows = await nodeResult.getAllRows();
         const nodeRow = nodeRows[0];
         totalNodes += Number(nodeRow?.cnt ?? nodeRow?.[0] ?? 0);
@@ -573,7 +586,7 @@ export const testArrayParams = async (): Promise<{ success: boolean; error?: str
     let testNodeId: string | null = null;
     for (const tableName of NODE_TABLES) {
       try {
-        const nodeResult = await conn.query(`MATCH (n:${tableName}) RETURN n.id AS id LIMIT 1`);
+        const nodeResult = await conn.query(`MATCH (n:${escapeTableName(tableName)}) RETURN n.id AS id LIMIT 1`);
         const nodeRows = await nodeResult.getAllRows();
         const nodeRow = nodeRows[0];
         if (nodeRow) {
