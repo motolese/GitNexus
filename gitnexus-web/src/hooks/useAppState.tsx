@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
 import * as Comlink from 'comlink';
-import { KnowledgeGraph, GraphNode, NodeLabel } from '../core/graph/types';
+import { KnowledgeGraph, GraphNode, GraphRelationship, NodeLabel } from '../core/graph/types';
 import { PipelineProgress, PipelineResult, deserializePipelineResult } from '../types/pipeline';
 import { createKnowledgeGraph } from '../core/graph/graph';
 import { DEFAULT_VISIBLE_LABELS } from '../lib/constants';
@@ -95,6 +95,7 @@ interface AppState {
   isAIHighlightsEnabled: boolean;
   toggleAIHighlights: () => void;
   clearAIToolHighlights: () => void;
+  clearAICitationHighlights: () => void;
   clearBlastRadius: () => void;
   queryResult: QueryResult | null;
   setQueryResult: (result: QueryResult | null) => void;
@@ -123,10 +124,9 @@ interface AppState {
   // Worker API (shared across app)
   runPipeline: (file: File, onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
   runPipelineFromFiles: (files: FileEntry[], onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
-  hydrateServerGraph: (result: ConnectToServerResult) => Promise<void>;
   runQuery: (cypher: string) => Promise<any[]>;
   isDatabaseReady: () => Promise<boolean>;
-  hydrateWorkerFromServer: (nodes: any[], relationships: any[], fileContents: Record<string, string>) => Promise<void>;
+  loadServerGraph: (nodes: GraphNode[], relationships: GraphRelationship[], fileContents: Record<string, string>) => Promise<void>;
 
   // Embedding state
   embeddingStatus: EmbeddingStatus;
@@ -227,6 +227,10 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
 
   const clearAIToolHighlights = useCallback(() => {
     setAIToolHighlightedNodeIds(new Set());
+  }, []);
+
+  const clearAICitationHighlights = useCallback(() => {
+    setAICitationHighlightedNodeIds(new Set());
   }, []);
 
   const clearBlastRadius = useCallback(() => {
@@ -471,16 +475,6 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     return deserializePipelineResult(serializedResult, createKnowledgeGraph);
   }, []);
 
-  const hydrateServerGraph = useCallback(async (result: ConnectToServerResult): Promise<void> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-    await api.hydrateServerGraph({
-      nodes: result.nodes,
-      relationships: result.relationships,
-      fileContents: result.fileContents,
-    });
-  }, []);
-
   const runQuery = useCallback(async (cypher: string): Promise<any[]> => {
     const api = apiRef.current;
     if (!api) throw new Error('Worker not initialized');
@@ -497,14 +491,14 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
 
-  const hydrateWorkerFromServer = useCallback(async (
-    nodes: any[],
-    relationships: any[],
+  const loadServerGraph = useCallback(async (
+    nodes: GraphNode[],
+    relationships: GraphRelationship[],
     fileContents: Record<string, string>
   ): Promise<void> => {
     const api = apiRef.current;
     if (!api) throw new Error('Worker not initialized');
-    await api.hydrateFromServerData(nodes, relationships, fileContents);
+    await api.loadServerGraph(nodes, relationships, fileContents);
   }, []);
 
   // Embedding methods
@@ -1004,10 +998,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setProgress({ phase: 'extracting', percent: 0, message: 'Switching repository...', detail: `Loading ${repoName}` });
     setViewMode('loading');
 
+    setIsAgentReady(false);
+
     // Clear stale graph state from previous repo (highlights, selections, blast radius)
     // Without this, sigma reducers dim ALL nodes/edges because old node IDs don't match
     setHighlightedNodeIds(new Set());
     clearAIToolHighlights();
+    clearAICitationHighlights();
     clearBlastRadius();
     setSelectedNode(null);
     setQueryResult(null);
@@ -1042,15 +1039,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
       for (const [p, c] of Object.entries(result.fileContents)) fileMap.set(p, c);
       setFileContents(fileMap);
 
-      await hydrateServerGraph(result);
-
-      setViewMode('exploring');
-      setProgress(null);
-
-      // Hydrate the worker-side DB (LadybugDB + BM25) so Query/Processes/embeddings work
-      hydrateWorkerFromServer(result.nodes, result.relationships, result.fileContents).then(() => {
-        if (getActiveProviderConfig()) initializeAgent(pName);
-
+      // Load graph into LadybugDB for Nexus AI queries, then init agent
+      try {
+        await loadServerGraph(result.nodes, result.relationships, result.fileContents);
+        if (getActiveProviderConfig()) {
+          await initializeAgent(pName);
+        }
+        setViewMode('exploring');
         startEmbeddings().catch((err) => {
           if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
             startEmbeddings('wasm').catch(console.warn);
@@ -1058,11 +1053,15 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
             console.warn('Embeddings auto-start failed:', err);
           }
         });
-      }).catch((err) => {
-        console.warn('Worker hydration failed (non-fatal):', err);
-        // Still initialize agent even if hydration fails
-        if (getActiveProviderConfig()) initializeAgent(pName);
-      });
+        setProgress(null);
+      } catch (err) {
+        console.warn('Failed to load graph into LadybugDB:', err);
+        setIsAgentReady(false);
+        await apiRef.current?.disposeAgent();
+        setAgentError('Failed to load graph into LadybugDB');
+        setViewMode('exploring');
+        setProgress(null);
+      }
     } catch (err) {
       console.error('Repo switch failed:', err);
       setProgress({
@@ -1070,9 +1069,11 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
         message: 'Failed to switch repository',
         detail: err instanceof Error ? err.message : 'Unknown error',
       });
+      setIsAgentReady(false);
+      await apiRef.current?.disposeAgent();
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, 3000);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, initializeAgent, startEmbeddings, hydrateServerGraph, hydrateWorkerFromServer, setHighlightedNodeIds, clearAIToolHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, loadServerGraph, initializeAgent, startEmbeddings, setHighlightedNodeIds, clearAIToolHighlights, clearAICitationHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   const removeCodeReference = useCallback((id: string) => {
     setCodeReferences(prev => {
@@ -1155,6 +1156,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     isAIHighlightsEnabled,
     toggleAIHighlights,
     clearAIToolHighlights,
+    clearAICitationHighlights,
     clearBlastRadius,
     queryResult,
     setQueryResult,
@@ -1175,10 +1177,9 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     switchRepo,
     runPipeline,
     runPipelineFromFiles,
-    hydrateServerGraph,
     runQuery,
     isDatabaseReady,
-    hydrateWorkerFromServer,
+    loadServerGraph,
     // Embedding state and methods
     embeddingStatus,
     embeddingProgress,
