@@ -267,12 +267,6 @@ export const loadGraphToLbug = async (
       } finally {
         await stmt.close();
       }
-
-        // Yield to event loop between sub-batches
-        if (i + SUB_BATCH_SIZE < rels.length) {
-          await new Promise(r => setTimeout(r, 0));
-        }
-      }
     }
 
     if (import.meta.env.DEV) {

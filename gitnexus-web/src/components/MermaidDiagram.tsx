@@ -71,7 +71,7 @@ export const MermaidDiagram = ({ code }: MermaidDiagramProps) => {
 
         // Render the diagram
         const { svg: renderedSvg } = await mermaid.render(id, code.trim());
-        const sanitizedSvg = DOMPurify.sanitize(renderedSvg, { USE_PROFILES: { svg: true, svgFilters: true } });
+        const sanitizedSvg = DOMPurify.sanitize(renderedSvg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] });
         setSvg(sanitizedSvg);
         setError(null);
       } catch (err) {
