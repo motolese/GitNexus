@@ -27,7 +27,6 @@ const AppContent = () => {
     isRightPanelOpen,
     runPipeline,
     runPipelineFromFiles,
-    hydrateServerGraph,
     isSettingsPanelOpen,
     setSettingsPanelOpen,
     isHelpDialogBoxOpen,
@@ -44,7 +43,7 @@ const AppContent = () => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
-    hydrateWorkerFromServer,
+    loadServerGraph,
     graph
   } = useAppState();
 
@@ -138,13 +137,13 @@ const AppContent = () => {
     }
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, initializeAgent]);
 
-  const handleServerConnect = useCallback(async (result: ConnectToServerResult) => {
+  const handleServerConnect = useCallback((result: ConnectToServerResult): Promise<void> => {
     // Extract project name from repoPath
     const repoPath = result.repoInfo.repoPath;
     const projectName = repoPath.split('/').pop() || 'server-project';
     setProjectName(projectName);
 
-    // Build KnowledgeGraph from server data (bypasses WASM pipeline entirely)
+    // Build KnowledgeGraph from server data for visualization
     const graph = createKnowledgeGraph();
     for (const node of result.nodes) {
       graph.addNode(node);
@@ -161,38 +160,33 @@ const AppContent = () => {
     }
     setFileContents(fileMap);
 
-    try {
-      await hydrateServerGraph(result);
+    // Transition directly to exploring view
+    setViewMode('exploring');
 
-      // Transition directly to exploring view
-      setViewMode('exploring');
-    } finally {
-      setProgress(null);
-    }
-
-    // Hydrate the worker-side DB (LadybugDB + BM25) so Query/Processes/embeddings work
-    hydrateWorkerFromServer(result.nodes, result.relationships, result.fileContents).then(() => {
-      // Initialize agent if LLM is configured
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      // Auto-start embeddings (now that LadybugDB is ready)
-      startEmbeddings().catch((err) => {
-        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-          startEmbeddings('wasm').catch(console.warn);
-        } else {
-          console.warn('Embeddings auto-start failed:', err);
+    // Load graph into LadybugDB (in-browser WASM database) for Nexus AI queries,
+    // then initialize agent once the database is ready
+    const loadGraphPromise = loadServerGraph(result.nodes, result.relationships, result.fileContents)
+      .then(() => {
+        if (getActiveProviderConfig()) {
+          return initializeAgent(projectName);
         }
+      })
+      .then(() => {
+        startEmbeddings().catch((err) => {
+          if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
+            startEmbeddings('wasm').catch(console.warn);
+          } else {
+            console.warn('Embeddings auto-start failed:', err);
+          }
+        });
+      })
+      .catch((err) => {
+        console.warn('Failed to load graph into LadybugDB:', err);
+        // Agent won't work but graph visualization still does
       });
-    }).catch((err) => {
-      console.warn('Worker hydration failed (non-fatal):', err);
-      // Still initialize agent even if hydration fails
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-    });
-  }, [setViewMode, setGraph, setFileContents, setProjectName, setProgress, initializeAgent, startEmbeddings, hydrateServerGraph, hydrateWorkerFromServer]);
+
+    return loadGraphPromise;
+  }, [setViewMode, setGraph, setFileContents, setProjectName, loadServerGraph, initializeAgent, startEmbeddings]);
 
   // Auto-connect when ?server query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
@@ -225,15 +219,11 @@ const AppContent = () => {
       }
     }).then(async (result) => {
       await handleServerConnect(result);
-
-      // Store server URL and fetch available repos for the repo switcher
+      setProgress(null);
       setServerBaseUrl(baseUrl);
-      try {
-        const repos = await fetchRepos(baseUrl);
-        setAvailableRepos(repos);
-      } catch (e) {
-        console.warn('Failed to fetch repo list:', e);
-      }
+      fetchRepos(baseUrl)
+        .then((repos) => setAvailableRepos(repos))
+        .catch((e) => console.warn('Failed to fetch repo list:', e));
     }).catch((err) => {
       console.error('Auto-connect failed:', err);
       setProgress({
@@ -268,15 +258,13 @@ const AppContent = () => {
         onGitClone={handleGitClone}
         onServerConnect={async (result, serverUrl) => {
           await handleServerConnect(result);
+          setProgress(null);
           if (serverUrl) {
             const baseUrl = normalizeServerUrl(serverUrl);
             setServerBaseUrl(baseUrl);
-            try {
-              const repos = await fetchRepos(baseUrl);
-              setAvailableRepos(repos);
-            } catch (e) {
-              console.warn('Failed to fetch repo list:', e);
-            }
+            fetchRepos(baseUrl)
+              .then((repos) => setAvailableRepos(repos))
+              .catch((e) => console.warn('Failed to fetch repo list:', e));
           }
         }}
       />
