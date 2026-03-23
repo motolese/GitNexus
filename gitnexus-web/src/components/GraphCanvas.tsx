@@ -82,6 +82,17 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     setSelectedNode(null);
   }, [setSelectedNode]);
 
+  const handleToggleAIHighlights = useCallback(() => {
+    if (isAIHighlightsEnabled) {
+      clearAIToolHighlights();
+      clearAICitationHighlights();
+      clearBlastRadius();
+      setSelectedNode(null);
+      setSigmaSelectedNode(null);
+    }
+    toggleAIHighlights();
+  }, [isAIHighlightsEnabled, clearAIToolHighlights, clearAICitationHighlights, clearBlastRadius, setSelectedNode, toggleAIHighlights]);
+
   const {
     containerRef,
     sigmaRef,
@@ -154,7 +165,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
 
     filterGraphByDepth(sigmaGraph, appSelectedNode?.id || null, depthFilter, visibleLabels);
     sigma.refresh();
-  }, [visibleLabels, depthFilter, appSelectedNode, sigmaRef]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sigmaRef identity never changes
+  }, [visibleLabels, depthFilter, appSelectedNode]);
 
   // Sync app selected node with sigma
   useEffect(() => {
@@ -312,17 +324,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
       {/* AI Highlights toggle - Top Right */}
       <div className="absolute top-4 right-4 z-20">
         <button
-          onClick={() => {
-            if (isAIHighlightsEnabled) {
-              // Turning off — clear AI highlights and selection (preserve user query highlights)
-              clearAIToolHighlights();
-              clearAICitationHighlights();
-              clearBlastRadius();
-              setSelectedNode(null);
-              setSigmaSelectedNode(null);
-            }
-            toggleAIHighlights();
-          }}
+          onClick={handleToggleAIHighlights}
           className={
             isAIHighlightsEnabled
               ? 'w-10 h-10 flex items-center justify-center bg-cyan-500/15 border border-cyan-400/40 rounded-lg text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-300/60 transition-colors'

@@ -90,13 +90,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         return parts.join('```');
     };
 
-    const handleLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    const handleLinkClick = React.useCallback((e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
         if (href.startsWith('code-ref:') || href.startsWith('node-ref:')) {
             e.preventDefault();
             onLinkClick?.(href);
         }
         // External links open in new tab (default behavior)
-    };
+    }, [onLinkClick]);
 
     const formattedContent = React.useMemo(() => formatMarkdownForDisplay(content), [content]);
 
@@ -176,7 +176,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             );
         },
         pre: ({ children }: any) => <>{children}</>,
-    }), [onLinkClick]); // Removed handleLinkClick dependency as it is defined inside component but depends on onLinkClick
+    }), [handleLinkClick]);
 
     return (
         <div className="text-text-primary text-sm">
