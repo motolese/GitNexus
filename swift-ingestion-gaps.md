@@ -29,6 +29,7 @@ Tracks missing Swift features in the GitNexus ingestion pipeline. Organized by p
 | Subscript declarations | `subscript(i:) -> T` not captured | Protocol conformance tracking |
 | Operator overloads | `static func + (lhs:, rhs:)` not captured | Mathematical types |
 | `deinit` | `deinit {}` not captured | Minor — rarely called explicitly |
+| Macro declarations | `@macro` / `#macro` (Swift 5.9+) not captured | Swift macro ecosystem is growing |
 
 ### Heritage / Inheritance
 
