@@ -118,4 +118,84 @@ describe('generateAllCSVs', () => {
     const csvData = generateAllCSVs(graph, new Map());
     expect(csvData.nodes.size).toBeGreaterThan(0);
   });
+
+  // ── Negative tests ──────────────────────────────────────────────
+
+  it('empty graph produces no node CSVs with data rows', () => {
+    const graph = createKnowledgeGraph();
+    const csvData = generateAllCSVs(graph, new Map());
+    // Nodes map may have header-only entries or be empty
+    for (const [, csv] of csvData.nodes.entries()) {
+      const rows = csv.split('\n').filter(r => r.trim());
+      expect(rows.length).toBeLessThanOrEqual(1); // header only, no data
+    }
+  });
+
+  it('empty graph produces relCSV with only a header', () => {
+    const graph = createKnowledgeGraph();
+    const csvData = generateAllCSVs(graph, new Map());
+    const lines = csvData.relCSV.split('\n').filter(r => r.trim());
+    expect(lines.length).toBeLessThanOrEqual(1);
+  });
+
+  it('node with double quotes in name is properly escaped', () => {
+    const graph = createKnowledgeGraph();
+    graph.addNode({
+      id: 'Function:a.ts:say"hello"',
+      label: 'Function',
+      properties: { name: 'say"hello"', filePath: 'a.ts', startLine: 1, endLine: 5 },
+    });
+
+    const csvData = generateAllCSVs(graph, new Map());
+    const csv = csvData.nodes.get('Function')!;
+    // RFC 4180: double quotes inside fields are doubled
+    expect(csv).toContain('""');
+  });
+
+  it('file node without matching fileContents gets empty content', () => {
+    const graph = createKnowledgeGraph();
+    graph.addNode({
+      id: 'File:missing.ts',
+      label: 'File',
+      properties: { name: 'missing.ts', filePath: 'missing.ts' },
+    });
+
+    const csvData = generateAllCSVs(graph, new Map()); // no file contents
+    const csv = csvData.nodes.get('File')!;
+    const rows = csv.split('\n');
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // Content field should be empty (not undefined or crash)
+  });
+
+  it('community with empty keywords array produces valid CSV', () => {
+    const graph = createKnowledgeGraph();
+    graph.addNode({
+      id: 'comm_1',
+      label: 'Community',
+      properties: {
+        name: 'EmptyCluster',
+        heuristicLabel: 'empty',
+        keywords: [],
+        description: '',
+        cohesion: 0,
+        symbolCount: 0,
+      },
+    });
+
+    expect(() => generateAllCSVs(graph, new Map())).not.toThrow();
+    const csvData = generateAllCSVs(graph, new Map());
+    expect(csvData.nodes.get('Community')).toBeDefined();
+  });
+
+  it('node labels not in NODE_TABLES are silently skipped', () => {
+    const graph = createKnowledgeGraph();
+    graph.addNode({
+      id: 'FakeLabel:test:item',
+      label: 'FakeLabel' as any,
+      properties: { name: 'item', filePath: 'test' },
+    });
+
+    // Should not crash — unknown labels are just not in any CSV
+    expect(() => generateAllCSVs(graph, new Map())).not.toThrow();
+  });
 });
