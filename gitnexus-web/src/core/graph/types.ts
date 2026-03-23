@@ -16,7 +16,23 @@ export type NodeLabel =
   | 'CodeElement'
   | 'Community'
   | 'Process'
-  | 'Section';
+  | 'Section'
+  | 'Struct'
+  | 'Trait'
+  | 'Impl'
+  | 'TypeAlias'
+  | 'Const'
+  | 'Static'
+  | 'Namespace'
+  | 'Union'
+  | 'Typedef'
+  | 'Macro'
+  | 'Property'
+  | 'Record'
+  | 'Delegate'
+  | 'Annotation'
+  | 'Constructor'
+  | 'Template';
 
 
 export type NodeProperties = {

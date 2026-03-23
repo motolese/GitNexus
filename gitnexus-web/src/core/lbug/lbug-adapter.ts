@@ -106,6 +106,16 @@ export const loadGraphToLbug = async (
   }
   const { lbug: lbugModule } = await initLbug();
 
+  // Close previous connection/database to avoid leaking WASM resources across repo switches
+  if (conn) {
+    try { await conn.close(); } catch {}
+    conn = null;
+  }
+  if (db) {
+    try { await db.close(); } catch {}
+    db = null;
+  }
+
   // Recreate a fresh in-memory DB each load to avoid cleanup/quoting issues with reserved names
   const BUFFER_POOL_SIZE = 512 * 1024 * 1024; // 512MB (mirror init)
   db = new lbugModule.Database(':memory:', BUFFER_POOL_SIZE);
