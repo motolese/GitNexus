@@ -138,8 +138,8 @@ export const ProcessFlowModal = ({ process, onClose, onFocusInGraph, isFullScree
         const renderDiagram = async () => {
             try {
                 // Check if we have raw mermaid code (from AI chat) or need to generate it
-                const mermaidCode = (process as any).rawMermaid
-                    ? (process as any).rawMermaid
+                const mermaidCode = process.rawMermaid
+                    ? process.rawMermaid
                     : generateProcessMermaid(process);
                 const id = `mermaid-${Date.now()}`;
 

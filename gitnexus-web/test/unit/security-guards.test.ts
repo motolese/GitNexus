@@ -18,7 +18,7 @@ const validRelType = (t: string): boolean =>
   (REL_TYPES as readonly string[]).includes(t);
 
 const isSafeId = (id: string): boolean =>
-  /^[a-zA-Z0-9_:.\-/]+$/.test(id);
+  /^[a-zA-Z0-9_:.\-/@]+$/.test(id);
 
 const isWriteQuery = (cypher: string): boolean =>
   /\b(CREATE|DELETE|SET|MERGE|REMOVE|DROP|DETACH)\b/.test(cypher.toUpperCase());
@@ -104,13 +104,14 @@ describe('isSafeId – identifier allowlist regex', () => {
     ['community id', 'comm_5'],
     ['file path id', 'File:src/index.ts'],
     ['nested path id', 'Function:src/utils/helpers.ts:doStuff'],
+    ['scoped npm package', 'Module:@scope/pkg'],
+    ['angular-style id', 'Module:@angular/core'],
   ])('accepts valid ID: %s', (_desc, id) => {
     expect(isSafeId(id)).toBe(true);
   });
 
   it.each([
     ['with spaces', 'Process:my process'],
-    ['with @ symbol', 'Module:@scope/pkg'],
   ])('rejects ID with unsafe chars: %s', (_desc, id) => {
     expect(isSafeId(id)).toBe(false);
   });

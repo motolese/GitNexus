@@ -12,7 +12,7 @@ import { ProcessFlowModal } from './ProcessFlowModal';
 import type { ProcessData, ProcessStep } from '../lib/mermaid-generator';
 
 /** Validate that an ID contains only expected node identifier characters (no Cypher metacharacters or spaces) */
-const isSafeId = (id: string): boolean => /^[a-zA-Z0-9_:.\-/]+$/.test(id);
+const isSafeId = (id: string): boolean => /^[a-zA-Z0-9_:.\-/@]+$/.test(id);
 
 export const ProcessesPanel = () => {
     const { graph, runQuery, setHighlightedNodeIds, highlightedNodeIds } = useAppState();
