@@ -72,6 +72,8 @@ export type RelationshipType =
   | 'IMPLEMENTS'
   | 'EXTENDS'
   | 'HAS_METHOD'
+  | 'HAS_PROPERTY'
+  | 'ACCESSES'
   | 'MEMBER_OF'
   | 'STEP_IN_PROCESS'
 
