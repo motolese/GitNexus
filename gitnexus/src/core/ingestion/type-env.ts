@@ -606,7 +606,10 @@ const resolveFixpointBindings = (
       let typeName: string | undefined;
       switch (item.kind) {
         case 'callResult':
-          typeName = returnTypeLookup.lookupReturnType(item.callee);
+          // Phase 9: Prefer FQN lookup when available for higher precision
+          typeName = item.calleeFqn
+            ? returnTypeLookup.lookupReturnType(item.calleeFqn)
+            : returnTypeLookup.lookupReturnType(item.callee);
           break;
         case 'copy':
           typeName = scopeEnv.get(item.rhs) ?? env.get(FILE_SCOPE)?.get(item.rhs);
