@@ -20,6 +20,8 @@ export interface WikiCommandOptions {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  apiVersion?: string;
+  reasoningModel?: boolean;
   concurrency?: string;
   gist?: boolean;
   provider?: LLMProvider;
@@ -122,12 +124,14 @@ export const wikiCommand = async (
 
   // ── Resolve LLM config (with interactive fallback) ─────────────────
   // Save any CLI overrides immediately
-  if (options?.apiKey || options?.model || options?.baseUrl || options?.provider) {
+  if (options?.apiKey || options?.model || options?.baseUrl || options?.provider || options?.apiVersion || options?.reasoningModel !== undefined) {
     const existing = await loadCLIConfig();
-    const updates: Record<string, string> = {};
+    const updates: Partial<typeof existing> = {};
     if (options.apiKey) updates.apiKey = options.apiKey;
     if (options.baseUrl) updates.baseUrl = options.baseUrl;
     if (options.provider) updates.provider = options.provider;
+    if (options.apiVersion) updates.apiVersion = options.apiVersion;
+    if (options.reasoningModel !== undefined) updates.isReasoningModel = options.reasoningModel;
     // Save model to appropriate field based on provider
     if (options.model) {
       if (options.provider === 'cursor') {
@@ -149,6 +153,8 @@ export const wikiCommand = async (
     baseUrl: options?.baseUrl,
     apiKey: options?.apiKey,
     provider: options?.provider,
+    apiVersion: options?.apiVersion,
+    isReasoningModel: options?.reasoningModel,
   });
 
   // Run interactive setup if no saved config and no CLI flags provided
