@@ -75,9 +75,17 @@ export function estimateTokens(text: string): number {
 
 /**
  * Returns true if the given base URL is an Azure OpenAI endpoint.
+ * Uses proper hostname matching to avoid spoofed URLs like
+ * "https://myresource.openai.azure.com.evil.com/v1".
  */
 export function isAzureProvider(baseUrl: string): boolean {
-  return baseUrl.includes('.openai.azure.com') || baseUrl.includes('.services.ai.azure.com');
+  try {
+    const { hostname } = new URL(baseUrl);
+    return hostname.endsWith('.openai.azure.com') || hostname.endsWith('.services.ai.azure.com');
+  } catch {
+    // If URL is malformed, fall back to substring check
+    return baseUrl.includes('.openai.azure.com') || baseUrl.includes('.services.ai.azure.com');
+  }
 }
 
 /**
@@ -87,7 +95,8 @@ export function isAzureProvider(baseUrl: string): boolean {
  */
 export function isReasoningModel(model: string, override?: boolean): boolean {
   if (override !== undefined) return override;
-  return /^o[1-9](-mini|-preview)?$|^o\d+-mini$/i.test(model);
+  // Match known bare reasoning models (o1, o3) and any o-series with -mini/-preview suffix
+  return /^o[1-9]\d*(-mini|-preview)$|^o1$|^o3$/i.test(model);
 }
 
 /**
@@ -121,6 +130,11 @@ export async function callLLM(
 
   // Detect Azure endpoint (by provider field or URL pattern)
   const azure = config.provider === 'azure' || isAzureProvider(config.baseUrl);
+
+  // Warn when using Azure legacy deployment URL without api-version
+  if (azure && !config.apiVersion && config.baseUrl.includes('/deployments/')) {
+    console.warn('[gitnexus] Warning: Azure legacy deployment URL detected but no api-version set. Add --api-version 2024-10-21 or use the v1 API format.');
+  }
 
   // Detect reasoning model (o1, o3, o4-mini etc.) or explicit override
   const reasoning = isReasoningModel(config.model, config.isReasoningModel);
@@ -167,7 +181,9 @@ export async function callLLM(
         const errorText = await response.text().catch(() => 'unknown error');
 
         // Azure content filter — surface a clear message instead of a generic API error
-        if (response.status === 400 && errorText.includes('content_filter')) {
+        if (azure && response.status === 400 && (
+          errorText.includes('content_filter') || errorText.includes('ResponsibleAIPolicyViolation')
+        )) {
           throw new Error(`Azure content filter blocked this request. The prompt triggered content policy. Details: ${errorText.slice(0, 300)}`);
         }
 
