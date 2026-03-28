@@ -1,19 +1,20 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react';
-import * as Comlink from 'comlink';
-import { KnowledgeGraph, GraphNode, GraphRelationship, NodeLabel } from '../core/graph/types';
-import { PipelineProgress, PipelineResult, deserializePipelineResult } from '../types/pipeline';
+import type { GraphNode, GraphRelationship, NodeLabel, PipelineProgress } from 'gitnexus-shared';
+import type { KnowledgeGraph } from '../core/graph/types';
 import { createKnowledgeGraph } from '../core/graph/graph';
-import type { IngestionWorkerApi } from '../workers/ingestion.worker';
-import type { FileEntry } from '../services/zip';
-import type { EmbeddingProgress, SemanticSearchResult } from '../core/embeddings/types';
 import type { LLMSettings, ProviderConfig, AgentStreamChunk, ChatMessage, ToolCallInfo, MessageStep } from '../core/llm/types';
 import { loadSettings, getActiveProviderConfig, saveSettings } from '../core/llm/settings-service';
 import type { AgentMessage } from '../core/llm/agent';
 import { type EdgeType } from '../lib/constants';
-import type { RepoSummary, ConnectToServerResult } from '../services/server-connection';
-import { fetchRepos, connectToServer } from '../services/server-connection';
+import {
+  fetchRepos, connectToServer, runQuery as backendRunQuery,
+  search as backendSearch, grep as backendGrep, readFile as backendReadFile,
+  startEmbeddings as backendStartEmbeddings, streamEmbeddingProgress,
+  probeBackend,
+  type BackendRepo, type ConnectResult, type JobProgress,
+} from '../services/backend-client';
 import { ERROR_RESET_DELAY_MS } from '../config/ui-constants';
-import { normalizePath, resolveFilePath as resolvePathFromContents } from '../lib/path-resolution';
+import { normalizePath } from '../lib/path-resolution';
 import { FILE_REF_REGEX, NODE_REF_REGEX } from '../lib/grounding-patterns';
 import { GraphStateProvider, useGraphState } from './app-state/graph';
 
@@ -63,8 +64,6 @@ interface AppState {
   // Graph data
   graph: KnowledgeGraph | null;
   setGraph: (graph: KnowledgeGraph | null) => void;
-  fileContents: Map<string, string>;
-  setFileContents: (contents: Map<string, string>) => void;
 
   // Selection
   selectedNode: GraphNode | null;
@@ -122,30 +121,25 @@ interface AppState {
   // Multi-repo switching
   serverBaseUrl: string | null;
   setServerBaseUrl: (url: string | null) => void;
-  availableRepos: RepoSummary[];
-  setAvailableRepos: (repos: RepoSummary[]) => void;
+  availableRepos: BackendRepo[];
+  setAvailableRepos: (repos: BackendRepo[]) => void;
   switchRepo: (repoName: string) => Promise<void>;
 
   // Worker API (shared across app)
-  runPipeline: (file: File, onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
-  runPipelineFromFiles: (files: FileEntry[], onProgress: (p: PipelineProgress) => void, clusteringConfig?: ProviderConfig) => Promise<PipelineResult>;
   runQuery: (cypher: string) => Promise<any[]>;
   isDatabaseReady: () => Promise<boolean>;
-  loadServerGraph: (nodes: GraphNode[], relationships: GraphRelationship[], fileContents: Record<string, string>) => Promise<void>;
 
   // Embedding state
   embeddingStatus: EmbeddingStatus;
-  embeddingProgress: EmbeddingProgress | null;
+  embeddingProgress: { phase: string; percent: number } | null;
 
   // Embedding methods
-  startEmbeddings: (forceDevice?: 'webgpu' | 'wasm') => Promise<void>;
+  startEmbeddings: () => Promise<void>;
   startEmbeddingsWithFallback: () => void;
-  semanticSearch: (query: string, k?: number) => Promise<SemanticSearchResult[]>;
+  semanticSearch: (query: string, k?: number) => Promise<any[]>;
   semanticSearchWithContext: (query: string, k?: number, hops?: number) => Promise<any[]>;
   isEmbeddingReady: boolean;
 
-  // Debug/test methods
-  testArrayParams: () => Promise<{ success: boolean; error?: string }>;
 
   // LLM/Agent state
   llmSettings: LLMSettings;
@@ -194,8 +188,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   const {
     graph,
     setGraph,
-    fileContents,
-    setFileContents,
     selectedNode,
     setSelectedNode,
     visibleLabels,
@@ -302,11 +294,11 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
 
   // Multi-repo switching
   const [serverBaseUrl, setServerBaseUrl] = useState<string | null>(null);
-  const [availableRepos, setAvailableRepos] = useState<RepoSummary[]>([]);
+  const [availableRepos, setAvailableRepos] = useState<BackendRepo[]>([]);
 
   // Embedding state
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>('idle');
-  const [embeddingProgress, setEmbeddingProgress] = useState<EmbeddingProgress | null>(null);
+  const [embeddingProgress, setEmbeddingProgress] = useState<{ phase: string; percent: number } | null>(null);
 
   // LLM/Agent state
   const [llmSettings, setLLMSettings] = useState<LLMSettings>(loadSettings);
@@ -325,10 +317,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   const [isCodePanelOpen, setCodePanelOpen] = useState(false);
   const [codeReferenceFocus, setCodeReferenceFocus] = useState<CodeReferenceFocus | null>(null);
 
-  const resolveFilePath = useCallback((requestedPath: string): string | null => {
-    return resolvePathFromContents(fileContents, requestedPath);
-  }, [fileContents]);
-
+  // Map of normalized file path → node ID for graph-based lookups
   const fileNodeByPath = useMemo(() => {
     if (!graph) return new Map<string, string>();
     const map = new Map<string, string>();
@@ -339,6 +328,29 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     }
     return map;
   }, [graph]);
+
+  // Map of normalized path → original path for resolving partial paths
+  const filePathIndex = useMemo(() => {
+    if (!graph) return new Map<string, string>();
+    const map = new Map<string, string>();
+    for (const n of graph.nodes) {
+      if (n.label === 'File' && n.properties.filePath) {
+        map.set(normalizePath(n.properties.filePath), n.properties.filePath);
+      }
+    }
+    return map;
+  }, [graph]);
+
+  const resolveFilePath = useCallback((requestedPath: string): string | null => {
+    const normalized = normalizePath(requestedPath);
+    // Exact match
+    if (filePathIndex.has(normalized)) return filePathIndex.get(normalized)!;
+    // Suffix match (partial paths like "src/utils.ts")
+    for (const [key, value] of filePathIndex) {
+      if (key.endsWith(normalized)) return value;
+    }
+    return null;
+  }, [filePathIndex]);
 
   const findFileNodeId = useCallback((filePath: string): string | undefined => {
     return fileNodeByPath.get(normalizePath(filePath));
@@ -411,125 +423,68 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     setCodePanelOpen(true);
   }, [selectedNode]);
 
-  // Worker (single instance shared across app)
-  const workerRef = useRef<Worker | null>(null);
-  const apiRef = useRef<Comlink.Remote<IngestionWorkerApi> | null>(null);
-
-  useEffect(() => {
-    const worker = new Worker(
-      new URL('../workers/ingestion.worker.ts', import.meta.url),
-      { type: 'module' }
-    );
-    const api = Comlink.wrap<IngestionWorkerApi>(worker);
-    workerRef.current = worker;
-    apiRef.current = api;
-
-    return () => {
-      worker.terminate();
-      workerRef.current = null;
-      apiRef.current = null;
-    };
-  }, []);
-
-  const runPipeline = useCallback(async (
-    file: File,
-    onProgress: (progress: PipelineProgress) => void,
-    clusteringConfig?: ProviderConfig
-  ): Promise<PipelineResult> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-
-    const proxiedOnProgress = Comlink.proxy(onProgress);
-    const serializedResult = await api.runPipeline(file, proxiedOnProgress, clusteringConfig);
-    return deserializePipelineResult(serializedResult, createKnowledgeGraph);
-  }, []);
-
-  const runPipelineFromFiles = useCallback(async (
-    files: FileEntry[],
-    onProgress: (progress: PipelineProgress) => void,
-    clusteringConfig?: ProviderConfig
-  ): Promise<PipelineResult> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-
-    const proxiedOnProgress = Comlink.proxy(onProgress);
-    const serializedResult = await api.runPipelineFromFiles(files, proxiedOnProgress, clusteringConfig);
-    return deserializePipelineResult(serializedResult, createKnowledgeGraph);
-  }, []);
+  // Backend client — direct HTTP calls (no Worker/Comlink)
+  const repoRef = useRef<string | undefined>(undefined);
 
   const runQuery = useCallback(async (cypher: string): Promise<any[]> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-    return api.runQuery(cypher);
+    return backendRunQuery(cypher, repoRef.current);
   }, []);
 
   const isDatabaseReady = useCallback(async (): Promise<boolean> => {
-    const api = apiRef.current;
-    if (!api) return false;
-    try {
-      return await api.isReady();
-    } catch {
-      return false;
-    }
+    return probeBackend();
   }, []);
 
-  const loadServerGraph = useCallback(async (
-    nodes: GraphNode[],
-    relationships: GraphRelationship[],
-    fileContents: Record<string, string>
-  ): Promise<void> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-    await api.loadServerGraph(nodes, relationships, fileContents);
-  }, []);
 
-  // Embedding methods
-  const startEmbeddings = useCallback(async (forceDevice?: 'webgpu' | 'wasm'): Promise<void> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
+  // Embedding methods — now trigger server-side via /api/embed
+  const embedAbortRef = useRef<AbortController | null>(null);
+
+  const startEmbeddings = useCallback(async (): Promise<void> => {
+    const repo = repoRef.current;
+    if (!repo) throw new Error('No repository loaded');
 
     setEmbeddingStatus('loading');
     setEmbeddingProgress(null);
 
     try {
-      const proxiedOnProgress = Comlink.proxy((progress: EmbeddingProgress) => {
-        setEmbeddingProgress(progress);
+      const { jobId } = await backendStartEmbeddings(repo);
 
-        // Update status based on phase
-        switch (progress.phase) {
-          case 'loading-model':
-            setEmbeddingStatus('loading');
-            break;
-          case 'embedding':
-            setEmbeddingStatus('embedding');
-            break;
-          case 'indexing':
-            setEmbeddingStatus('indexing');
-            break;
-          case 'ready':
+      // Stream progress via SSE
+      await new Promise<void>((resolve, reject) => {
+        embedAbortRef.current = streamEmbeddingProgress(
+          jobId,
+          (progress: JobProgress) => {
+            setEmbeddingProgress({ phase: progress.phase as any, percent: progress.percent });
+            if (progress.phase === 'loading-model' || progress.phase === 'loading') {
+              setEmbeddingStatus('loading');
+            } else if (progress.phase === 'embedding') {
+              setEmbeddingStatus('embedding');
+            } else if (progress.phase === 'indexing') {
+              setEmbeddingStatus('indexing');
+            }
+          },
+          () => {
             setEmbeddingStatus('ready');
-            break;
-          case 'error':
+            setEmbeddingProgress({ phase: 'ready' as any, percent: 100 });
+            resolve();
+          },
+          (error: string) => {
             setEmbeddingStatus('error');
-            break;
-        }
+            reject(new Error(error));
+          },
+        );
       });
-
-      await api.startEmbeddingPipeline(proxiedOnProgress, forceDevice);
     } catch (error: any) {
-      // Check if it's WebGPU not available - let caller handle the dialog
-      if (error?.name === 'WebGPUNotAvailableError' ||
-        error?.message?.includes('WebGPU not available')) {
-        setEmbeddingStatus('idle'); // Reset to idle so user can try again
-      } else {
-        setEmbeddingStatus('error');
+      if (error?.message?.includes('already in progress')) {
+        // Dedup — embeddings already running, just wait
+        setEmbeddingStatus('embedding');
+        return;
       }
+      setEmbeddingStatus('error');
       throw error;
     }
   }, []);
 
   const startEmbeddingsWithFallback = useCallback(() => {
-    // Skip auto-start in automated/headless runs to avoid WebGPU errors and long downloads.
     const isPlaywright =
       (typeof navigator !== 'undefined' && navigator.webdriver) ||
       (typeof import.meta !== 'undefined' && typeof import.meta.env !== 'undefined' && import.meta.env.VITE_PLAYWRIGHT_TEST) ||
@@ -539,38 +494,25 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
       return;
     }
     startEmbeddings().catch((err) => {
-      if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-        startEmbeddings('wasm').catch(console.warn);
-      } else {
-        console.warn('Embeddings auto-start failed:', err);
-      }
+      console.warn('Embeddings auto-start failed:', err);
     });
   }, [startEmbeddings]);
 
   const semanticSearch = useCallback(async (
     query: string,
     k: number = 10
-  ): Promise<SemanticSearchResult[]> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-    return api.semanticSearch(query, k);
+  ): Promise<any[]> => {
+    return backendSearch(query, { limit: k, mode: 'semantic', repo: repoRef.current });
   }, []);
 
   const semanticSearchWithContext = useCallback(async (
     query: string,
     k: number = 5,
-    hops: number = 2
+    _hops: number = 2
   ): Promise<any[]> => {
-    const api = apiRef.current;
-    if (!api) throw new Error('Worker not initialized');
-    return api.semanticSearchWithContext(query, k, hops);
+    return backendSearch(query, { limit: k, mode: 'semantic', enrich: true, repo: repoRef.current });
   }, []);
 
-  const testArrayParams = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
-    const api = apiRef.current;
-    if (!api) return { success: false, error: 'Worker not initialized' };
-    return api.testArrayParams();
-  }, []);
 
   // LLM methods
   const updateLLMSettings = useCallback((updates: Partial<LLMSettings>) => {
@@ -585,13 +527,10 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     setLLMSettings(loadSettings());
   }, []);
 
-  const initializeAgent = useCallback(async (overrideProjectName?: string): Promise<void> => {
-    const api = apiRef.current;
-    if (!api) {
-      setAgentError('Worker not initialized');
-      return;
-    }
+  // Agent state — agent runs on main thread now (I/O-bound, not CPU-bound)
+  const agentRef = useRef<any>(null);
 
+  const initializeAgent = useCallback(async (overrideProjectName?: string): Promise<void> => {
     const config = getActiveProviderConfig();
     if (!config) {
       setAgentError('Please configure an LLM provider in settings');
@@ -602,18 +541,28 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     setAgentError(null);
 
     try {
-      // Use override if provided (for fresh loads), fallback to state (for re-init)
       const effectiveProjectName = overrideProjectName || projectName || 'project';
-      const result = await api.initializeAgent(config, effectiveProjectName);
-      if (result.success) {
-        setIsAgentReady(true);
-        setAgentError(null);
-        if (import.meta.env.DEV) {
-          console.log('✅ Agent initialized successfully');
-        }
-      } else {
-        setAgentError(result.error ?? 'Failed to initialize agent');
-        setIsAgentReady(false);
+      const repo = repoRef.current;
+
+      // Build backend interface for Graph RAG tools
+      const { createGraphRAGAgent } = await import('../core/llm/agent');
+      const { buildCodebaseContext } = await import('../core/llm/context-builder');
+
+      const executeQuery = (cypher: string) => backendRunQuery(cypher, repo);
+      const codebaseContext = await buildCodebaseContext(executeQuery, effectiveProjectName);
+
+      const backend = {
+        executeQuery,
+        search: (query: string, opts?: any) => backendSearch(query, { ...opts, repo }),
+        grep: (pattern: string, limit?: number) => backendGrep(pattern, repo, limit),
+        readFile: (filePath: string) => backendReadFile(filePath, { repo }).then(r => r.content),
+      };
+
+      agentRef.current = createGraphRAGAgent(config, backend, codebaseContext);
+      setIsAgentReady(true);
+      setAgentError(null);
+      if (import.meta.env.DEV) {
+        console.log('✅ Agent initialized successfully');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -625,12 +574,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   }, [projectName]);
 
   const sendChatMessage = useCallback(async (message: string): Promise<void> => {
-    const api = apiRef.current;
-    if (!api) {
-      setAgentError('Worker not initialized');
-      return;
-    }
-
     // Refresh Code panel for the new question: keep user-pinned refs, clear old AI citations
     clearAICodeReferences();
     // Also clear previous tool-driven AI highlights (highlight_in_graph)
@@ -639,7 +582,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     if (!isAgentReady) {
       // Try to initialize first
       await initializeAgent();
-      if (!apiRef.current) return;
+      if (!agentRef.current) return;
     }
 
     // Add user message
@@ -721,7 +664,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     };
 
     try {
-      const onChunk = Comlink.proxy((chunk: AgentStreamChunk) => {
+      const onChunk = ((chunk: AgentStreamChunk) => {
         switch (chunk.type) {
           case 'reasoning':
             // LLM's thinking/reasoning - accumulate contiguous reasoning
@@ -976,7 +919,15 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
         }
       });
 
-      await api.chatStream(history, onChunk);
+      // Stream agent response using the full streaming generator
+      // (handles reasoning, tool_call, tool_result, content, and done events)
+      const agent = agentRef.current;
+      if (!agent) throw new Error('Agent not initialized');
+      const { streamAgentResponse } = await import('../core/llm/agent');
+      for await (const chunk of streamAgentResponse(agent, history)) {
+        onChunk(chunk);
+      }
+      onChunk({ type: 'done' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setAgentError(message);
@@ -987,9 +938,8 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   }, [chatMessages, isAgentReady, initializeAgent, resolveFilePath, findFileNodeId, addCodeReference, clearAICodeReferences, clearAIToolHighlights, graph, embeddingStatus]);
 
   const stopChatResponse = useCallback(() => {
-    const api = apiRef.current;
-    if (api && isChatLoading) {
-      api.stopChat();
+    if (isChatLoading) {
+      // Agent streaming will be interrupted by the AbortController in sendChatMessage
       setIsChatLoading(false);
       setCurrentToolCalls([]);
     }
@@ -1022,7 +972,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     setCodeReferenceFocus(null);
 
     try {
-      const result: ConnectToServerResult = await connectToServer(serverBaseUrl, (phase, downloaded, total) => {
+      const result: ConnectResult = await connectToServer(serverBaseUrl, (phase, downloaded, total) => {
         if (phase === 'validating') {
           setProgress({ phase: 'extracting', percent: 5, message: 'Switching repository...', detail: 'Validating' });
         } else if (phase === 'downloading') {
@@ -1034,23 +984,21 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
         }
       }, undefined, repoName);
 
-      // Reuse the same handleServerConnect logic inline
-      const repoPath = result.repoInfo.repoPath;
-      const pName = repoName || result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
+      // Build graph for visualization
+      const repoPath = result.repoInfo.repoPath ?? result.repoInfo.path;
+      const pName = repoName || result.repoInfo.name || repoPath?.split('/').pop() || 'server-project';
       setProjectName(pName);
+      repoRef.current = pName;
 
-      const graph = createKnowledgeGraph();
-      for (const node of result.nodes) graph.addNode(node);
-      for (const rel of result.relationships) graph.addRelationship(rel);
-      setGraph(graph);
+      const newGraph = createKnowledgeGraph();
+      for (const node of result.nodes) newGraph.addNode(node);
+      for (const rel of result.relationships) newGraph.addRelationship(rel);
+      setGraph(newGraph);
 
-      const fileMap = new Map<string, string>();
-      for (const [p, c] of Object.entries(result.fileContents)) fileMap.set(p, c);
-      setFileContents(fileMap);
+      // No fileContents needed — grep/read tools use backend HTTP
 
-      // Load graph into LadybugDB for Nexus AI queries, then init agent
+      // Initialize agent with backend queries, then start embeddings
       try {
-        await loadServerGraph(result.nodes, result.relationships, result.fileContents);
         if (getActiveProviderConfig()) {
           await initializeAgent(pName);
         }
@@ -1058,10 +1006,10 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
         startEmbeddingsWithFallback();
         setProgress(null);
       } catch (err) {
-        console.warn('Failed to load graph into LadybugDB:', err);
+        console.warn('Failed to initialize agent:', err);
         setIsAgentReady(false);
-        await apiRef.current?.disposeAgent();
-        setAgentError('Failed to load graph into LadybugDB');
+        agentRef.current = null;
+        setAgentError('Failed to initialize agent');
         setViewMode('exploring');
         setProgress(null);
       }
@@ -1073,10 +1021,10 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
         detail: err instanceof Error ? err.message : 'Unknown error',
       });
       setIsAgentReady(false);
-      await apiRef.current?.disposeAgent();
+      agentRef.current = null;
       setTimeout(() => { setViewMode('exploring'); setProgress(null); }, ERROR_RESET_DELAY_MS);
     }
-  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, setFileContents, loadServerGraph, initializeAgent, startEmbeddingsWithFallback, setHighlightedNodeIds, clearAIToolHighlights, clearAICitationHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
+  }, [serverBaseUrl, setProgress, setViewMode, setProjectName, setGraph, initializeAgent, startEmbeddingsWithFallback, setHighlightedNodeIds, clearAIToolHighlights, clearAICitationHighlights, clearBlastRadius, setSelectedNode, setQueryResult, setCodeReferences, setCodePanelOpen, setCodeReferenceFocus]);
 
   const removeCodeReference = useCallback((id: string) => {
     setCodeReferences(prev => {
@@ -1115,8 +1063,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     setViewMode,
     graph,
     setGraph,
-    fileContents,
-    setFileContents,
     selectedNode,
     setSelectedNode,
     isRightPanelOpen,
@@ -1160,11 +1106,8 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     availableRepos,
     setAvailableRepos,
     switchRepo,
-    runPipeline,
-    runPipelineFromFiles,
     runQuery,
     isDatabaseReady,
-    loadServerGraph,
     // Embedding state and methods
     embeddingStatus,
     embeddingProgress,
@@ -1173,8 +1116,6 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     semanticSearch,
     semanticSearchWithContext,
     isEmbeddingReady: embeddingStatus === 'ready',
-    // Debug
-    testArrayParams,
     // LLM/Agent state
     llmSettings,
     updateLLMSettings,

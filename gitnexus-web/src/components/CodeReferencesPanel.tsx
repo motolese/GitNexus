@@ -1,45 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Code, PanelLeftClose, PanelLeft, Trash2, X, Target, FileCode, Sparkles, MousePointerClick } from '@/lib/lucide-icons';
+import { Code, PanelLeftClose, PanelLeft, Trash2, X, Target, FileCode, Sparkles, MousePointerClick, Loader2 } from '@/lib/lucide-icons';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useAppState } from '../hooks/useAppState';
-import type { GraphNode } from '../core/graph/types';
+import { type GraphNode, getSyntaxLanguageFromFilename } from 'gitnexus-shared';
 import { NODE_COLORS } from '../lib/constants';
+import { readFile, type ReadFileResult } from '../services/backend-client';
 
-/** Map file extension to Prism syntax highlighter language identifier */
 const getSyntaxLanguage = (filePath: string | undefined): string => {
   if (!filePath) return 'text';
-  const ext = filePath.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'js': case 'jsx': case 'mjs': case 'cjs': return 'javascript';
-    case 'ts': case 'tsx': case 'mts': case 'cts': return 'typescript';
-    case 'py': case 'pyw': return 'python';
-    case 'rb': case 'rake': case 'gemspec': return 'ruby';
-    case 'java': return 'java';
-    case 'go': return 'go';
-    case 'rs': return 'rust';
-    case 'c': case 'h': return 'c';
-    case 'cpp': case 'cc': case 'cxx': case 'hpp': case 'hxx': case 'hh': return 'cpp';
-    case 'cs': return 'csharp';
-    case 'php': return 'php';
-    case 'kt': case 'kts': return 'kotlin';
-    case 'swift': return 'swift';
-    case 'json': return 'json';
-    case 'yaml': case 'yml': return 'yaml';
-    case 'md': case 'mdx': return 'markdown';
-    case 'html': case 'htm': case 'erb': return 'markup';
-    case 'css': case 'scss': case 'sass': return 'css';
-    case 'sh': case 'bash': case 'zsh': return 'bash';
-    case 'sql': return 'sql';
-    case 'xml': return 'xml';
-    default: break;
-  }
-  // Handle extensionless Ruby files
-  const basename = filePath.split('/').pop() || '';
-  if (['Rakefile', 'Gemfile', 'Guardfile', 'Vagrantfile', 'Brewfile'].includes(basename)) return 'ruby';
-  if (['Makefile'].includes(basename)) return 'makefile';
-  if (['Dockerfile'].includes(basename)) return 'docker';
-  return 'text';
+  return getSyntaxLanguageFromFilename(filePath);
 };
 
 // Match the code theme used elsewhere in the app
@@ -67,7 +37,6 @@ export interface CodeReferencesPanelProps {
 export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) => {
   const {
     graph,
-    fileContents,
     selectedNode,
     codeReferences,
     removeCodeReference,
@@ -195,39 +164,91 @@ export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) =
 
   const refsWithSnippets = useMemo(() => {
     return aiReferences.map((ref) => {
-      const content = fileContents.get(ref.filePath);
-      if (!content) {
-        return { ref, content: null as string | null, start: 0, end: 0, highlightStart: 0, highlightEnd: 0, totalLines: 0 };
-      }
-
-      const lines = content.split('\n');
-      const totalLines = lines.length;
-
-      const startLine = ref.startLine ?? 0;
-      const endLine = ref.endLine ?? startLine;
-
-      const contextBefore = 3;
-      const contextAfter = 20;
-      const start = Math.max(0, startLine - contextBefore);
-      const end = Math.min(totalLines - 1, endLine + contextAfter);
-
-      return {
-        ref,
-        content: lines.slice(start, end + 1).join('\n'),
-        start,
-        end,
-        highlightStart: Math.max(0, startLine - start),
-        highlightEnd: Math.max(0, endLine - start),
-        totalLines,
-      };
+      return { ref, content: null as string | null, start: 0, end: 0, highlightStart: 0, highlightEnd: 0, totalLines: 0 };
     });
-  }, [aiReferences, fileContents]);
+  }, [aiReferences]);
 
   const selectedFilePath = selectedNode?.properties?.filePath;
-  const selectedFileContent = selectedFilePath ? fileContents.get(selectedFilePath) : undefined;
   const selectedIsFile = selectedNode?.label === 'File' && !!selectedFilePath;
   const showSelectedViewer = !!selectedNode && !!selectedFilePath;
   const showCitations = aiReferences.length > 0;
+
+  // Fetch file content from the server when a node with a filePath is selected.
+  // For non-File nodes (functions, classes, etc.), fetch a buffer around the symbol
+  // instead of the entire file. For File nodes, fetch the whole file.
+  const CONTEXT_LINES = 50; // lines of context above and below the symbol
+
+  const [fileResult, setFileResult] = useState<ReadFileResult | null>(null);
+  const [isLoadingFile, setIsLoadingFile] = useState(false);
+  const selectedViewerRef = useRef<HTMLDivElement>(null);
+
+  const selectedFileContent = fileResult?.content;
+  const fileStartLine = fileResult?.startLine ?? 0;
+
+  useEffect(() => {
+    if (!selectedFilePath) {
+      setFileResult(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingFile(true);
+    setFileResult(null);
+
+    // Determine read range: full file for File nodes, buffered for symbols
+    const startLine = selectedNode?.properties?.startLine as number | undefined;
+    const endLine = selectedNode?.properties?.endLine as number | undefined;
+    const isWholeFile = selectedIsFile || startLine === undefined;
+
+    const options = isWholeFile
+      ? undefined
+      : {
+          startLine: Math.max(0, startLine - CONTEXT_LINES),
+          endLine: (endLine ?? startLine) + CONTEXT_LINES,
+        };
+
+    readFile(selectedFilePath, options).then(result => {
+      if (!cancelled) {
+        setFileResult(result);
+        setIsLoadingFile(false);
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setFileResult(null);
+        setIsLoadingFile(false);
+      }
+    });
+
+    return () => { cancelled = true; };
+  }, [selectedFilePath, selectedNode?.properties?.startLine, selectedNode?.properties?.endLine, selectedIsFile]);
+
+  // Scroll to the selected node's startLine after content loads
+  useEffect(() => {
+    if (!selectedFileContent || !selectedNode?.properties?.startLine) return;
+    const startLine = selectedNode.properties.startLine as number;
+
+    // Double rAF: wait for SyntaxHighlighter to fully render before scrolling
+    let cancelled = false;
+    const outerRaf = requestAnimationFrame(() => {
+      const innerRaf = requestAnimationFrame(() => {
+        if (cancelled) return;
+        const container = selectedViewerRef.current;
+        if (!container) return;
+        const lineEl = container.querySelector(`[data-line-number="${startLine + 1}"]`) as HTMLElement
+          ?? container.querySelectorAll('.linenumber')[startLine] as HTMLElement;
+        if (lineEl) {
+          lineEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          // Fallback: estimate scroll position based on line height
+          const lineHeight = 20.8; // 13px font * 1.6 line-height
+          container.scrollTop = Math.max(0, startLine * lineHeight - container.clientHeight / 3);
+        }
+      });
+      rafIds.push(innerRaf);
+    });
+    const rafIds = [outerRaf];
+    return () => { cancelled = true; rafIds.forEach(id => cancelAnimationFrame(id)); };
+  }, [selectedFileContent, selectedNode?.properties?.startLine]);
 
   if (isCollapsed) {
     return (
@@ -313,13 +334,18 @@ export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) =
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="flex-1 min-h-0 overflow-auto scrollbar-thin">
-              {selectedFileContent ? (
+            <div ref={selectedViewerRef} className="flex-1 min-h-0 overflow-auto scrollbar-thin">
+              {isLoadingFile ? (
+                <div className="flex items-center justify-center py-8 gap-2 text-text-muted">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Loading source...</span>
+                </div>
+              ) : selectedFileContent ? (
                 <SyntaxHighlighter
                   language={getSyntaxLanguage(selectedFilePath)}
                   style={customTheme as any}
                   showLineNumbers
-                  startingLineNumber={1}
+                  startingLineNumber={fileStartLine + 1}
                   lineNumberStyle={{
                     minWidth: '3em',
                     paddingRight: '1em',
@@ -328,12 +354,12 @@ export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) =
                     userSelect: 'none',
                   }}
                   lineProps={(lineNumber) => {
-                    const startLine = selectedNode?.properties?.startLine;
-                    const endLine = selectedNode?.properties?.endLine ?? startLine;
+                    const symStart = selectedNode?.properties?.startLine;
+                    const symEnd = selectedNode?.properties?.endLine ?? symStart;
                     const isHighlighted =
-                      typeof startLine === 'number' &&
-                      lineNumber >= startLine + 1 &&
-                      lineNumber <= (endLine ?? startLine) + 1;
+                      typeof symStart === 'number' &&
+                      lineNumber >= symStart + 1 &&
+                      lineNumber <= (symEnd ?? symStart) + 1;
                     return {
                       style: {
                         display: 'block',
