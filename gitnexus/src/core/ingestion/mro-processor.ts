@@ -488,42 +488,53 @@ function emitMethodImplementsEdges(
       bucket.push({ methodId, parameterTypes });
     }
 
-    // For each parent, check if it's an interface/trait or connected via IMPLEMENTS
-    for (const parentId of parentIds) {
-      const parentNode = graph.getNode(parentId);
-      if (!parentNode) continue;
+    // Collect ALL transitive ancestors and classify each as EXTENDS or IMPLEMENTS
+    const allAncestors = gatherAncestors(classId, parentMap);
+    const ancestorEdgeTypes = buildTransitiveEdgeTypes(classId, parentMap, parentEdgeType);
 
-      const isInterfaceLike = parentNode.label === 'Interface' || parentNode.label === 'Trait';
-      const edgeType = parentEdgeType.get(classId)?.get(parentId);
-      if (!isInterfaceLike && edgeType !== 'IMPLEMENTS') continue;
+    // Dedup set: avoid duplicate edges from diamond paths
+    const emitted = new Set<string>();
 
-      // Get parent's methods
-      const parentMethodIds = methodMap.get(parentId) ?? [];
+    // For each ancestor, check if it's an interface/trait or classified as IMPLEMENTS
+    for (const ancestorId of allAncestors) {
+      const ancestorNode = graph.getNode(ancestorId);
+      if (!ancestorNode) continue;
 
-      for (const parentMethodId of parentMethodIds) {
-        const parentMethodNode = graph.getNode(parentMethodId);
-        if (!parentMethodNode || parentMethodNode.label === 'Property') continue;
+      const isInterfaceLike = ancestorNode.label === 'Interface' || ancestorNode.label === 'Trait';
+      const classifiedEdgeType = ancestorEdgeTypes.get(ancestorId);
+      if (!isInterfaceLike && classifiedEdgeType !== 'IMPLEMENTS') continue;
 
-        const parentName = parentMethodNode.properties.name as string;
-        const parentParamTypes =
-          (parentMethodNode.properties.parameterTypes as string[] | undefined) ?? [];
+      // Get ancestor's methods
+      const ancestorMethodIds = methodMap.get(ancestorId) ?? [];
+
+      for (const ancestorMethodId of ancestorMethodIds) {
+        const ancestorMethodNode = graph.getNode(ancestorMethodId);
+        if (!ancestorMethodNode || ancestorMethodNode.label === 'Property') continue;
+
+        const ancestorName = ancestorMethodNode.properties.name as string;
+        const ancestorParamTypes =
+          (ancestorMethodNode.properties.parameterTypes as string[] | undefined) ?? [];
 
         // Find matching method in own class by name + parameterTypes
-        const candidates = ownMethodsByName.get(parentName);
+        const candidates = ownMethodsByName.get(ancestorName);
         if (!candidates) continue;
 
         for (const candidate of candidates) {
-          if (parameterTypesMatch(candidate.parameterTypes, parentParamTypes)) {
+          if (parameterTypesMatch(candidate.parameterTypes, ancestorParamTypes)) {
+            const edgeKey = `${candidate.methodId}->${ancestorMethodId}`;
+            if (emitted.has(edgeKey)) break;
+            emitted.add(edgeKey);
+
             graph.addRelationship({
-              id: generateId('METHOD_IMPLEMENTS', `${candidate.methodId}->${parentMethodId}`),
+              id: generateId('METHOD_IMPLEMENTS', edgeKey),
               sourceId: candidate.methodId,
-              targetId: parentMethodId,
+              targetId: ancestorMethodId,
               type: 'METHOD_IMPLEMENTS',
               confidence: 1.0,
               reason: '',
             });
             edgeCount++;
-            break; // first match wins for this parent method
+            break; // first match wins for this ancestor method
           }
         }
       }

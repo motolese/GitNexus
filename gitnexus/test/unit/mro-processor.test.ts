@@ -71,6 +71,25 @@ function addExtends(
   });
 }
 
+function addInterfaceExtends(
+  graph: KnowledgeGraph,
+  childName: string,
+  parentName: string,
+  childLabel: 'Interface' | 'Trait' = 'Interface',
+  parentLabel: 'Interface' | 'Trait' = 'Interface',
+) {
+  const childId = generateId(childLabel, childName);
+  const parentId = generateId(parentLabel, parentName);
+  graph.addRelationship({
+    id: generateId('EXTENDS', `${childId}->${parentId}`),
+    sourceId: childId,
+    targetId: parentId,
+    type: 'EXTENDS',
+    confidence: 1.0,
+    reason: '',
+  });
+}
+
 function addImplements(
   graph: KnowledgeGraph,
   childName: string,
@@ -712,6 +731,121 @@ describe('computeMRO', () => {
 
       const result = computeMRO(graph);
       expect(result.methodImplementsEdges).toBe(0);
+    });
+
+    describe('METHOD_IMPLEMENTS transitive ancestors', () => {
+      it('transitive interface chain: C.foo links to both B.foo and A.foo', () => {
+        // A (Interface) has foo, B (Interface) has foo extends A, C (Class) implements B
+        const graph = createKnowledgeGraph();
+        addClass(graph, 'A', 'java', 'Interface');
+        addClass(graph, 'B', 'java', 'Interface');
+        addClass(graph, 'C', 'java');
+
+        addInterfaceExtends(graph, 'B', 'A');
+        addImplements(graph, 'C', 'B');
+
+        const aFoo = addMethod(graph, 'A', 'foo', 'Interface');
+        const bFoo = addMethod(graph, 'B', 'foo', 'Interface');
+        addMethod(graph, 'C', 'foo');
+
+        const result = computeMRO(graph);
+
+        const edges: any[] = [];
+        graph.forEachRelationship((rel) => {
+          if (rel.type === 'METHOD_IMPLEMENTS') edges.push(rel);
+        });
+
+        // C.foo should link to both B.foo and A.foo
+        expect(edges.some((e) => e.targetId === bFoo)).toBe(true);
+        expect(edges.some((e) => e.targetId === aFoo)).toBe(true);
+        expect(result.methodImplementsEdges).toBeGreaterThanOrEqual(2);
+      });
+
+      it('inherited contract method only on grandparent: C.bar links to A.bar', () => {
+        // A (Interface) has bar, B (Interface) extends A but has NO bar, C implements B
+        const graph = createKnowledgeGraph();
+        addClass(graph, 'A', 'java', 'Interface');
+        addClass(graph, 'B', 'java', 'Interface');
+        addClass(graph, 'C', 'java');
+
+        addInterfaceExtends(graph, 'B', 'A');
+        addImplements(graph, 'C', 'B');
+
+        const aBar = addMethod(graph, 'A', 'bar', 'Interface');
+        // B has no bar method
+        addMethod(graph, 'C', 'bar');
+
+        const result = computeMRO(graph);
+
+        const edges: any[] = [];
+        graph.forEachRelationship((rel) => {
+          if (rel.type === 'METHOD_IMPLEMENTS') edges.push(rel);
+        });
+
+        // C.bar should link to A.bar even though A is not a direct parent
+        expect(edges.some((e) => e.targetId === aBar)).toBe(true);
+        expect(result.methodImplementsEdges).toBeGreaterThanOrEqual(1);
+      });
+
+      it('diamond deduplication: E.foo gets exactly one edge to A.foo', () => {
+        // A (Interface) has foo
+        // B (Interface) has foo, extends A
+        // D (Interface) has foo, extends A
+        // E (Class) implements B and D
+        const graph = createKnowledgeGraph();
+        addClass(graph, 'A', 'java', 'Interface');
+        addClass(graph, 'B', 'java', 'Interface');
+        addClass(graph, 'D', 'java', 'Interface');
+        addClass(graph, 'E', 'java');
+
+        addInterfaceExtends(graph, 'B', 'A');
+        addInterfaceExtends(graph, 'D', 'A');
+        addImplements(graph, 'E', 'B');
+        addImplements(graph, 'E', 'D');
+
+        const aFoo = addMethod(graph, 'A', 'foo', 'Interface');
+        const bFoo = addMethod(graph, 'B', 'foo', 'Interface');
+        const dFoo = addMethod(graph, 'D', 'foo', 'Interface');
+        addMethod(graph, 'E', 'foo');
+
+        const result = computeMRO(graph);
+
+        const eFoo = generateId('Method', 'E.foo');
+        const edges: any[] = [];
+        graph.forEachRelationship((rel) => {
+          if (rel.type === 'METHOD_IMPLEMENTS') edges.push(rel);
+        });
+
+        // Filter to only edges FROM E.foo
+        const eFooEdges = edges.filter((e) => e.sourceId === eFoo);
+
+        // E.foo should link to B.foo, D.foo, and exactly ONE A.foo (deduplicated)
+        expect(eFooEdges.filter((e) => e.targetId === bFoo)).toHaveLength(1);
+        expect(eFooEdges.filter((e) => e.targetId === dFoo)).toHaveLength(1);
+        expect(eFooEdges.filter((e) => e.targetId === aFoo)).toHaveLength(1);
+        // Total from E.foo: 3 edges (B.foo + D.foo + A.foo), not 4
+        expect(eFooEdges).toHaveLength(3);
+      });
+
+      it('no transitive through class-only chain', () => {
+        // A (Class) has foo, B (Class) extends A has foo, C (Class) extends B has foo
+        const graph = createKnowledgeGraph();
+        addClass(graph, 'A', 'java');
+        addClass(graph, 'B', 'java');
+        addClass(graph, 'C', 'java');
+
+        addExtends(graph, 'B', 'A');
+        addExtends(graph, 'C', 'B');
+
+        addMethod(graph, 'A', 'foo');
+        addMethod(graph, 'B', 'foo');
+        addMethod(graph, 'C', 'foo');
+
+        const result = computeMRO(graph);
+
+        // All class-extends, no interface involved → 0 METHOD_IMPLEMENTS edges
+        expect(result.methodImplementsEdges).toBe(0);
+      });
     });
 
     it('is queryable via MATCH pattern', () => {

@@ -34,8 +34,12 @@ describe('IMPACT_RELATION_CONFIDENCE', () => {
     expect(IMPACT_RELATION_CONFIDENCE['IMPLEMENTS']).toBe(0.85);
   });
 
-  it('OVERRIDES has confidence 0.85 (statically verifiable override)', () => {
+  it('METHOD_OVERRIDES has confidence 0.85 (statically verifiable override)', () => {
     expect(IMPACT_RELATION_CONFIDENCE['METHOD_OVERRIDES']).toBe(0.85);
+  });
+
+  it('METHOD_IMPLEMENTS has confidence 0.85 (statically verifiable implementation)', () => {
+    expect(IMPACT_RELATION_CONFIDENCE['METHOD_IMPLEMENTS']).toBe(0.85);
   });
 
   it('HAS_METHOD has confidence 0.95 (structural containment)', () => {
@@ -77,6 +81,7 @@ describe('confidenceForRelType', () => {
     expect(confidenceForRelType('EXTENDS')).toBe(0.85);
     expect(confidenceForRelType('IMPLEMENTS')).toBe(0.85);
     expect(confidenceForRelType('METHOD_OVERRIDES')).toBe(0.85);
+    expect(confidenceForRelType('METHOD_IMPLEMENTS')).toBe(0.85);
     expect(confidenceForRelType('HAS_METHOD')).toBe(0.95);
     expect(confidenceForRelType('HAS_PROPERTY')).toBe(0.95);
     expect(confidenceForRelType('ACCESSES')).toBe(0.8);
