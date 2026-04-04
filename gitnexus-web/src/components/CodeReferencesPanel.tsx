@@ -175,7 +175,7 @@ export const CodeReferencesPanel = ({ onFocusNode }: CodeReferencesPanelProps) =
     return () => {
       rafIds.forEach((id) => cancelAnimationFrame(id));
     };
-  }, [codeReferenceFocus?.ts, aiReferences]);
+  }, [codeReferenceFocus, aiReferences]);
 
   const refsWithSnippets = useMemo(() => {
     return aiReferences.map((ref) => {
