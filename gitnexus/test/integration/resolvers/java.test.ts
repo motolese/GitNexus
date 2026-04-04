@@ -1701,3 +1701,115 @@ describe('Java interface dispatch (METHOD_IMPLEMENTS)', () => {
     expect(sourceFiles.some((f) => f.includes('SendEmail'))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Java overloaded method disambiguation (METHOD_IMPLEMENTS with arity)
+// Repository interface: find(int), find(String, boolean), save(String)
+// SqlRepository implements Repository with matching overloads
+// ---------------------------------------------------------------------------
+
+describe('Java overloaded method disambiguation (METHOD_IMPLEMENTS)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'java-overload-dispatch'), () => {});
+  }, 60000);
+
+  it('detects distinct Method nodes for overloaded find methods on SqlRepository', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const findMethods = methods.filter(
+      (m) => m.name === 'find' && m.properties.filePath?.includes('SqlRepository'),
+    );
+    expect(findMethods.length).toBe(2);
+    const paramCounts = findMethods.map((m) => m.properties.parameterCount).sort();
+    expect(paramCounts).toEqual([1, 2]);
+  });
+
+  it('detects distinct Method nodes for overloaded find methods on Repository interface', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const findMethods = methods.filter(
+      (m) =>
+        m.name === 'find' &&
+        m.properties.filePath?.includes('Repository') &&
+        !m.properties.filePath?.includes('SqlRepository'),
+    );
+    expect(findMethods.length).toBe(2);
+    const paramCounts = findMethods.map((m) => m.properties.parameterCount).sort();
+    expect(paramCounts).toEqual([1, 2]);
+  });
+
+  it('emits METHOD_IMPLEMENTS for find(int) → Repository.find(int)', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const edge = mi.find(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('Repository'),
+    );
+    expect(edge).toBeDefined();
+    // Verify at least one find→find edge has arity 1 on source side
+    const findEdges = mi.filter(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('Repository'),
+    );
+    const sourceNodes = findEdges.map((e) => {
+      const methods = getNodesByLabelFull(result, 'Method');
+      return methods.find(
+        (m) =>
+          m.name === 'find' &&
+          m.properties.filePath?.includes('SqlRepository') &&
+          m.properties.parameterCount === 1,
+      );
+    });
+    expect(sourceNodes.some((n) => n !== undefined)).toBe(true);
+  });
+
+  it('emits METHOD_IMPLEMENTS for find(String, boolean) → Repository.find(String, boolean)', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const findEdges = mi.filter(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('Repository'),
+    );
+    // There should be two find→find edges (one per overload)
+    expect(findEdges.length).toBe(2);
+  });
+
+  it('emits METHOD_IMPLEMENTS for save(String) → Repository.save(String)', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const edge = mi.find(
+      (e) =>
+        e.source === 'save' &&
+        e.target === 'save' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('Repository'),
+    );
+    expect(edge).toBeDefined();
+  });
+
+  it('emits exactly 3 METHOD_IMPLEMENTS edges', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const edges = mi.filter(
+      (e) => e.sourceFilePath.includes('SqlRepository') && e.targetFilePath.includes('Repository'),
+    );
+    expect(edges.length).toBe(3);
+  });
+
+  it('emits CALLS edges from run() to both find overloads', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const findCalls = calls.filter(
+      (c) =>
+        c.source === 'run' &&
+        c.target === 'find' &&
+        c.sourceFilePath.includes('App') &&
+        c.targetFilePath.includes('SqlRepository'),
+    );
+    expect(findCalls.length).toBe(2);
+  });
+});

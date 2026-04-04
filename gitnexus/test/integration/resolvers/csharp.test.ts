@@ -1767,3 +1767,64 @@ describe('C# interface dispatch (METHOD_IMPLEMENTS)', () => {
     expect(saveEdge).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Overloaded method disambiguation: METHOD_IMPLEMENTS with overloads
+// IRepository declares Find(int), Find(string), Save(string).
+// SqlRepository implements all three.
+// Overloaded methods (same name, different params) collapse into a single
+// graph node (generateId drops startLine), so Find appears once per file.
+// METHOD_IMPLEMENTS still emits one edge per unique (source, target) pair.
+// ---------------------------------------------------------------------------
+
+describe('C# overloaded method disambiguation (METHOD_IMPLEMENTS)', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'csharp-overload-dispatch'), () => {});
+  }, 60000);
+
+  it('detects 2 distinct Find Method nodes on SqlRepository (different arities)', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const findOnSql = methods.filter(
+      (m) => m.name === 'Find' && m.properties.filePath?.includes('SqlRepository'),
+    );
+    expect(findOnSql.length).toBe(2);
+  });
+
+  it('emits METHOD_IMPLEMENTS edges for both Find overloads', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const findEdges = mi.filter(
+      (e) =>
+        e.source === 'Find' &&
+        e.target === 'Find' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('IRepository'),
+    );
+    expect(findEdges.length).toBe(2);
+  });
+
+  it('emits METHOD_IMPLEMENTS for Save -> IRepository.Save', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const saveEdge = mi.find(
+      (e) =>
+        e.source === 'Save' &&
+        e.target === 'Save' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('IRepository'),
+    );
+    expect(saveEdge).toBeDefined();
+  });
+
+  it('emits exactly 3 METHOD_IMPLEMENTS edges', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    expect(mi.length).toBe(3);
+  });
+
+  it('detects SqlRepository class and IRepository interface', () => {
+    const classes = getNodesByLabel(result, 'Class');
+    const ifaces = getNodesByLabel(result, 'Interface');
+    expect(classes).toContain('SqlRepository');
+    expect(ifaces).toContain('IRepository');
+  });
+});

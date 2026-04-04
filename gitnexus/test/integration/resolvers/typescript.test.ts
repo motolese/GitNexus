@@ -2443,3 +2443,56 @@ describe('TypeScript interface dispatch (METHOD_IMPLEMENTS)', () => {
     expect(saveEdge).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Overloaded method disambiguation: interface with overloaded find + save,
+// concrete class implements all three. TypeScript overloads collapse to one
+// implementation signature — expect the implementation body, not individual
+// overload signatures.
+// ---------------------------------------------------------------------------
+
+describe('TypeScript overloaded method disambiguation', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'ts-overload-dispatch'), () => {});
+  }, 60000);
+
+  it('emits METHOD_IMPLEMENTS edge for find', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const findEdge = mi.find(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(findEdge).toBeDefined();
+  });
+
+  it('emits METHOD_IMPLEMENTS edge for save', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const saveEdge = mi.find(
+      (e) =>
+        e.source === 'save' &&
+        e.target === 'save' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(saveEdge).toBeDefined();
+  });
+
+  it('TypeScript overloads collapse — find has one implementation METHOD_IMPLEMENTS edge', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    // TypeScript overloads collapse to one implementation signature,
+    // so we expect a single METHOD_IMPLEMENTS edge for find (not two)
+    const findEdges = mi.filter(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('sql-repository') &&
+        e.targetFilePath.includes('repository'),
+    );
+    expect(findEdges.length).toBe(1);
+  });
+});

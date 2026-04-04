@@ -1857,3 +1857,54 @@ describe('Kotlin interface dispatch (METHOD_IMPLEMENTS)', () => {
     expect(saveEdge).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Overloaded method disambiguation: interface with overloaded find + save,
+// concrete class implements all three. Verifies METHOD_IMPLEMENTS edges
+// correctly distinguish between overloaded signatures.
+// ---------------------------------------------------------------------------
+
+describe('Kotlin overloaded method disambiguation', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(path.join(FIXTURES, 'kotlin-overload-dispatch'), () => {});
+  }, 60000);
+
+  it('detects 2 distinct find Method nodes on SqlRepository', () => {
+    const methods = getNodesByLabelFull(result, 'Method');
+    const sqlRepoFinds = methods.filter(
+      (m) => m.name === 'find' && m.properties.filePath?.includes('SqlRepository'),
+    );
+    expect(sqlRepoFinds.length).toBe(2);
+  });
+
+  it('emits METHOD_IMPLEMENTS edges for both find overloads', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const findEdges = mi.filter(
+      (e) =>
+        e.source === 'find' &&
+        e.target === 'find' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('Repository'),
+    );
+    expect(findEdges.length).toBe(2);
+  });
+
+  it('emits METHOD_IMPLEMENTS edge for save', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    const saveEdge = mi.find(
+      (e) =>
+        e.source === 'save' &&
+        e.target === 'save' &&
+        e.sourceFilePath.includes('SqlRepository') &&
+        e.targetFilePath.includes('Repository'),
+    );
+    expect(saveEdge).toBeDefined();
+  });
+
+  it('emits exactly 3 METHOD_IMPLEMENTS edges total', () => {
+    const mi = getRelationships(result, 'METHOD_IMPLEMENTS');
+    expect(mi.length).toBe(3);
+  });
+});
