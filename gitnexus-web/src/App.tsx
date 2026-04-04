@@ -61,6 +61,11 @@ const AppContent = () => {
       setProjectName(projectName);
       setCurrentRepo(projectName);
 
+      // Update URL so F5 / bookmarks preserve which repo is open
+      const url = new URL(window.location.href);
+      url.searchParams.set('project', projectName);
+      window.history.replaceState(null, '', url.toString());
+
       // Build KnowledgeGraph from server data for visualization
       const graph = createKnowledgeGraph();
       for (const node of result.nodes) {
