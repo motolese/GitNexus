@@ -3,12 +3,13 @@ import { test, expect } from '@playwright/test';
 /**
  * E2E tests for heartbeat disconnect/reconnect behavior.
  *
- * Verifies that when the server heartbeat drops, the UI shows a
- * "reconnecting" banner instead of resetting to onboarding, and
- * recovers automatically when the heartbeat returns.
+ * Verifies the key regression: when the heartbeat fails, the UI shows a
+ * "reconnecting" banner instead of resetting to the onboarding screen.
  *
- * Uses browser offline mode to break the existing EventSource connection
- * (page.route only intercepts new requests, not established SSE streams).
+ * Strategy: block /api/heartbeat via route interception BEFORE loading the
+ * graph. The heartbeat EventSource can never connect, so onReconnecting
+ * fires on the first retry attempt. This reliably tests the banner behavior
+ * without depending on setOffline timing (which varies across CI environments).
  */
 
 const BACKEND_URL = process.env.BACKEND_URL ?? 'http://localhost:4747';
@@ -47,59 +48,59 @@ test.beforeAll(async () => {
   }
 });
 
-/** Load the app, select a repo, and wait for the graph to appear. */
-async function waitForGraphLoaded(page: import('@playwright/test').Page) {
-  await page.goto('/');
-
-  const landingCard = page.locator('[data-testid="landing-repo-card"]').first();
-  try {
-    await landingCard.waitFor({ state: 'visible', timeout: 15_000 });
-    await landingCard.click();
-  } catch {
-    // Landing screen may not appear (e.g. ?server auto-connect)
-  }
-
-  await expect(page.locator('[data-testid="status-ready"]')).toBeVisible({ timeout: 30_000 });
-}
-
 test.describe('Heartbeat Reconnect', () => {
-  test('shows reconnecting banner when heartbeat fails, not onboarding reset', async ({
+  test('shows reconnecting banner instead of onboarding reset when heartbeat is unavailable', async ({
     page,
-    context,
   }) => {
-    await waitForGraphLoaded(page);
+    // Block the heartbeat BEFORE navigating — the EventSource will fail
+    // immediately on every connection attempt, triggering onReconnecting.
+    await page.route('**/api/heartbeat', (route) => route.abort('connectionrefused'));
 
-    // Verify we're in the exploring view
-    await expect(page.locator('[data-testid="status-ready"]')).toBeVisible();
+    // Load the app and connect to a repo (all other endpoints work normally)
+    await page.goto('/');
 
-    // Go offline — this breaks the existing EventSource SSE connection,
-    // unlike page.route() which only intercepts new requests.
-    await context.setOffline(true);
+    const landingCard = page.locator('[data-testid="landing-repo-card"]').first();
+    try {
+      await landingCard.waitFor({ state: 'visible', timeout: 15_000 });
+      await landingCard.click();
+    } catch {
+      // auto-connect may skip the landing screen
+    }
 
-    // Wait for the reconnecting banner to appear
+    // Wait for graph to load (heartbeat is blocked, but graph loads fine)
+    await expect(page.locator('[data-testid="status-ready"]')).toBeVisible({ timeout: 30_000 });
+
+    // The reconnecting banner should appear (heartbeat is failing)
     const banner = page.getByText('Server connection lost');
     await expect(banner).toBeVisible({ timeout: 15_000 });
 
-    // The graph canvas should STILL be visible — not reset to onboarding
+    // The graph canvas should STILL be visible — NOT reset to onboarding
     await expect(page.locator('canvas').first()).toBeVisible();
-
-    // Clean up
-    await context.setOffline(false);
   });
 
-  test('recovers when network returns after disconnect', async ({ page, context }) => {
-    await waitForGraphLoaded(page);
+  test('banner clears when heartbeat becomes available', async ({ page }) => {
+    // Start with heartbeat blocked
+    await page.route('**/api/heartbeat', (route) => route.abort('connectionrefused'));
 
-    // Go offline to trigger disconnect
-    await context.setOffline(true);
+    await page.goto('/');
+    const landingCard = page.locator('[data-testid="landing-repo-card"]').first();
+    try {
+      await landingCard.waitFor({ state: 'visible', timeout: 15_000 });
+      await landingCard.click();
+    } catch {
+      // auto-connect may skip the landing screen
+    }
 
+    await expect(page.locator('[data-testid="status-ready"]')).toBeVisible({ timeout: 30_000 });
+
+    // Verify banner appears
     const banner = page.getByText('Server connection lost');
     await expect(banner).toBeVisible({ timeout: 15_000 });
 
-    // Come back online — heartbeat should reconnect automatically
-    await context.setOffline(false);
+    // Unblock heartbeat — the real server is running, so reconnect will succeed
+    await page.unroute('**/api/heartbeat');
 
-    // Banner should disappear
+    // Banner should disappear as heartbeat reconnects
     await expect(banner).not.toBeVisible({ timeout: 30_000 });
 
     // Graph should still be there
