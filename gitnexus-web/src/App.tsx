@@ -36,7 +36,6 @@ const AppContent = () => {
     refreshLLMSettings,
     initializeAgent,
     startEmbeddingsWithFallback,
-    embeddingStatus,
     codeReferences,
     selectedNode,
     isCodePanelOpen,
