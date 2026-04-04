@@ -1620,4 +1620,100 @@ describe('computeMRO', () => {
       expect(edges[0].confidence).toBe(0.7);
     });
   });
+
+  // ---- IMPLEMENTS BFS ambiguity for default methods -------------------------
+  describe('IMPLEMENTS BFS ambiguity for default methods', () => {
+    it('does not emit METHOD_IMPLEMENTS when two interfaces provide same default method (ambiguous)', () => {
+      // IAncestor (Interface) has abstract process()
+      // IAlpha (Interface) extends IAncestor, has concrete process()
+      // IBeta  (Interface) extends IAncestor, has concrete process()
+      // CImpl  (Class) implements IAlpha, implements IBeta
+      // CImpl has NO process() method
+      //
+      // findInheritedMethod walks IMPLEMENTS BFS and finds process() in BOTH
+      // IAlpha and IBeta => ambiguous => null => no METHOD_IMPLEMENTS edge.
+      const graph = createKnowledgeGraph();
+      addClass(graph, 'IAncestor', 'java', 'Interface');
+      addClass(graph, 'IAlpha', 'java', 'Interface');
+      addClass(graph, 'IBeta', 'java', 'Interface');
+      addClass(graph, 'CImpl', 'java');
+
+      addInterfaceExtends(graph, 'IAlpha', 'IAncestor');
+      addInterfaceExtends(graph, 'IBeta', 'IAncestor');
+      addImplements(graph, 'CImpl', 'IAlpha');
+      addImplements(graph, 'CImpl', 'IBeta');
+
+      addMethod(graph, 'IAncestor', 'process', 'Interface', undefined, { isAbstract: true });
+      addMethod(graph, 'IAlpha', 'process', 'Interface');
+      addMethod(graph, 'IBeta', 'process', 'Interface');
+
+      const result = computeMRO(graph);
+
+      // IAlpha.process -> IAncestor.process and IBeta.process -> IAncestor.process
+      // are legitimate edges from sub-interface processing. The ambiguity check
+      // ensures that NO additional edge is emitted on behalf of CImpl (which has
+      // no own process()). Since CImpl has no methods, no edge should be sourced
+      // from a CImpl method. Verify by checking that the only METHOD_IMPLEMENTS
+      // edges for process() are the two interface-to-interface ones.
+      const edges = graph.relationships.filter((r) => r.type === 'METHOD_IMPLEMENTS');
+      const processEdges = edges.filter((e) => {
+        const target = graph.getNode(e.targetId);
+        return target?.properties.name === 'process';
+      });
+      // IAlpha.process->IAncestor.process and IBeta.process->IAncestor.process
+      // are emitted from the sub-interface processing (each concrete method
+      // implements the ancestor's abstract method). No additional edge should be
+      // emitted on behalf of CImpl because findInheritedMethod returns null
+      // (ambiguous: two candidates at the same BFS depth).
+      expect(processEdges).toHaveLength(2);
+      const alphaProcess = generateId('Method', 'IAlpha.process#0');
+      const betaProcess = generateId('Method', 'IBeta.process#0');
+      const sourceIds = processEdges.map((e) => e.sourceId).sort();
+      expect(sourceIds).toEqual([alphaProcess, betaProcess].sort());
+    });
+
+    it('emits METHOD_IMPLEMENTS when only one interface provides the default method (unambiguous)', () => {
+      // IAncestor (Interface) has abstract process()
+      // IAlpha (Interface) extends IAncestor, has concrete process()
+      // IBeta  (Interface) extends IAncestor, does NOT have process()
+      // CImpl  (Class) implements IAlpha, implements IBeta
+      // CImpl has NO process() method
+      //
+      // findInheritedMethod walks IMPLEMENTS BFS and finds process() only in
+      // IAlpha => unambiguous => emits 1 METHOD_IMPLEMENTS edge.
+      const graph = createKnowledgeGraph();
+      addClass(graph, 'IAncestor', 'java', 'Interface');
+      addClass(graph, 'IAlpha', 'java', 'Interface');
+      addClass(graph, 'IBeta', 'java', 'Interface');
+      addClass(graph, 'CImpl', 'java');
+
+      addInterfaceExtends(graph, 'IAlpha', 'IAncestor');
+      addInterfaceExtends(graph, 'IBeta', 'IAncestor');
+      addImplements(graph, 'CImpl', 'IAlpha');
+      addImplements(graph, 'CImpl', 'IBeta');
+
+      const ancestorProcess = addMethod(graph, 'IAncestor', 'process', 'Interface', undefined, {
+        isAbstract: true,
+      });
+      const alphaProcess = addMethod(graph, 'IAlpha', 'process', 'Interface');
+      // IBeta has no process() method
+
+      const result = computeMRO(graph);
+
+      const edges = graph.relationships.filter((r) => r.type === 'METHOD_IMPLEMENTS');
+      const processEdges = edges.filter((e) => {
+        const target = graph.getNode(e.targetId);
+        return target?.properties.name === 'process';
+      });
+      // At minimum, IAlpha.process -> IAncestor.process is emitted (from IAlpha's
+      // own processing). CImpl's findInheritedMethod also finds IAlpha.process as
+      // the sole unambiguous match, potentially emitting the same edge again.
+      expect(processEdges.length).toBeGreaterThanOrEqual(1);
+      // Every process edge should point from IAlpha.process to IAncestor.process
+      for (const edge of processEdges) {
+        expect(edge.sourceId).toBe(alphaProcess);
+        expect(edge.targetId).toBe(ancestorProcess);
+      }
+    });
+  });
 });

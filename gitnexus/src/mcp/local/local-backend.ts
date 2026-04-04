@@ -2484,8 +2484,8 @@ export class LocalBackend {
       typeof labelRaw === 'string' && labelRaw.trim().length > 0 ? labelRaw.trim() : '';
 
     // Map legacy relation type names (backward compat for OVERRIDES → METHOD_OVERRIDES)
-    const mappedRelTypes = opts.relationTypes?.map((t: string) =>
-      t === 'OVERRIDES' ? 'METHOD_OVERRIDES' : t,
+    const mappedRelTypes = opts.relationTypes?.flatMap((t: string) =>
+      t === 'OVERRIDES' ? ['OVERRIDES', 'METHOD_OVERRIDES'] : [t],
     );
     const rawRelTypes =
       mappedRelTypes && mappedRelTypes.length > 0

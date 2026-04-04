@@ -385,6 +385,42 @@ describe('Java variadic call resolution', () => {
     expect(logCall!.source).toBe('run');
     expect(logCall!.targetFilePath).toBe('com/example/util/Logger.java');
   });
+
+  it('CALLS edges from within variadic method have valid sourceId (no ID mismatch)', () => {
+    // Collect all CALLS edges whose source is in Logger.java
+    const danglingSourceIds: string[] = [];
+    for (const rel of result.graph.iterRelationships()) {
+      if (rel.type !== 'CALLS') continue;
+      const sourceNode = result.graph.getNode(rel.sourceId);
+      if (!sourceNode) {
+        danglingSourceIds.push(rel.sourceId);
+        continue;
+      }
+      // Specifically flag Logger.java sources that don't resolve
+      if (
+        sourceNode.properties.filePath === 'com/example/util/Logger.java' &&
+        !result.graph.getNode(rel.sourceId)
+      ) {
+        danglingSourceIds.push(rel.sourceId);
+      }
+    }
+
+    // No CALLS edge should have a dangling (unresolvable) sourceId.
+    // This catches the bug where definition creates Method:...record#N but
+    // findEnclosingFunctionId generates Method:...record (no suffix),
+    // producing CALLS edges whose sourceId doesn't match any graph node.
+    expect(danglingSourceIds).toEqual([]);
+
+    // Additionally verify that ALL relationships (not just CALLS) have
+    // resolvable sourceIds — a stronger invariant.
+    const allDangling: string[] = [];
+    for (const rel of result.graph.iterRelationships()) {
+      if (!result.graph.getNode(rel.sourceId)) {
+        allDangling.push(`${rel.type}:${rel.sourceId}`);
+      }
+    }
+    expect(allDangling).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

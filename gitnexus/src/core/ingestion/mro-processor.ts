@@ -744,6 +744,12 @@ function findInheritedMethod(
     }
   }
 
+  // Collect all matches from the IMPLEMENTS BFS — return null if ambiguous (>1 match)
+  const implMatches: Array<{
+    methodId: string;
+    parameterTypes: string[];
+    confident: boolean;
+  }> = [];
   const implVisited = new Set<string>();
   while (implBfsQueue.length > 0) {
     const ifaceId = implBfsQueue.shift()!;
@@ -773,7 +779,11 @@ function findInheritedMethod(
         targetParamCount,
       );
       if (ptResult.match) {
-        return { methodId: mid, parameterTypes: mParamTypes, confident: ptResult.confident };
+        implMatches.push({
+          methodId: mid,
+          parameterTypes: mParamTypes,
+          confident: ptResult.confident,
+        });
       }
     }
 
@@ -784,7 +794,9 @@ function findInheritedMethod(
     }
   }
 
-  return null; // no matches found
+  // Ambiguous: multiple interfaces provide the same default method
+  if (implMatches.length === 1) return implMatches[0];
+  return null; // 0 matches or ambiguous (>1)
 }
 
 /**

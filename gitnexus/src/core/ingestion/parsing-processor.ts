@@ -450,7 +450,9 @@ const processParsingSequential = async (
               const info = result.methods.find((m) => m.name === nodeName && m.line === defLine);
               if (info) {
                 enriched = true;
-                arityForId = info.parameters.length;
+                arityForId = info.parameters.some((p) => p.isVariadic)
+                  ? undefined
+                  : info.parameters.length;
                 methodProps = buildMethodProps(info);
               }
             }
@@ -464,7 +466,9 @@ const processParsingSequential = async (
             });
             if (info) {
               enriched = true;
-              arityForId = info.parameters.length;
+              arityForId = info.parameters.some((p) => p.isVariadic)
+                ? undefined
+                : info.parameters.length;
               methodProps = buildMethodProps(info);
             }
           }

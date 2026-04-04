@@ -1821,7 +1821,7 @@ const processFileGroup = (
             if (info) {
               enrichedByMethodExtractor = true;
               const hasVariadic = info.parameters.some((p) => p.isVariadic);
-              arityForId = info.parameters.length;
+              arityForId = hasVariadic ? undefined : info.parameters.length;
               parameterCount = hasVariadic ? undefined : info.parameters.length;
               const types: string[] = [];
               let optionalCount = 0;
@@ -1861,7 +1861,7 @@ const processFileGroup = (
           if (info) {
             enrichedByMethodExtractor = true;
             const hasVariadic = info.parameters.some((p) => p.isVariadic);
-            arityForId = info.parameters.length;
+            arityForId = hasVariadic ? undefined : info.parameters.length;
             parameterCount = hasVariadic ? undefined : info.parameters.length;
             const types: string[] = [];
             let optionalCount = 0;
