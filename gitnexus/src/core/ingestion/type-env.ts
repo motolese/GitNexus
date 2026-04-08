@@ -8,6 +8,7 @@ import { CALL_EXPRESSION_TYPES } from './utils/call-analysis.js';
 import { SupportedLanguages } from 'gitnexus-shared';
 import { TYPED_PARAMETER_TYPES } from './type-extractors/shared.js';
 import { getProvider } from './languages/index.js';
+import type { BindingAccumulator, BindingEntry } from './binding-accumulator.js';
 import type {
   ClassNameLookup,
   ReturnTypeLookup,
@@ -73,6 +74,9 @@ export interface TypeEnvironment {
    *  Populated when a variable has BOTH a declared base type AND a more specific
    *  constructor type (e.g., `Animal a = new Dog()` → key maps to 'Dog'). */
   readonly constructorTypeMap: ReadonlyMap<string, string>;
+  /** Drain all scoped bindings into a BindingAccumulator.
+   *  Called once per file at end of processing. Skips empty scopes. */
+  flush(filePath: string, accumulator: BindingAccumulator): void;
 }
 
 /**
@@ -1245,6 +1249,17 @@ export const buildTypeEnv = (
     fileScope: () => env.get(FILE_SCOPE) ?? EMPTY_FILE_SCOPE,
     allScopes: () => env as ReadonlyMap<string, ReadonlyMap<string, string>>,
     constructorTypeMap,
+    flush(filePath: string, accumulator: BindingAccumulator): void {
+      const entries: BindingEntry[] = [];
+      for (const [scope, scopeMap] of env) {
+        for (const [varName, typeName] of scopeMap) {
+          entries.push({ scope, varName, typeName });
+        }
+      }
+      if (entries.length > 0) {
+        accumulator.appendFile(filePath, entries);
+      }
+    },
   };
 };
 

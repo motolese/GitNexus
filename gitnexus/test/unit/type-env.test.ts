@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildTypeEnv, type TypeEnvironment } from '../../src/core/ingestion/type-env.js';
+import { BindingAccumulator } from '../../src/core/ingestion/binding-accumulator.js';
 import {
   createSymbolTable,
   type SymbolDefinition,
@@ -5857,6 +5858,68 @@ function process() {
       const validateCall = calls.find((n: any) => n.text.includes('validate'));
       expect(validateCall).toBeDefined();
       expect(typeEnv.lookup('c', validateCall)).toBe('Config');
+    });
+  });
+
+  describe('flush', () => {
+    it('flushes file-scope bindings into accumulator', () => {
+      const code = `const user: User = getUser();\nconst count: number = 0;`;
+      const tree = parse(code, TypeScript.typescript);
+      const typeEnv = buildTypeEnv(tree, 'typescript');
+      const acc = new BindingAccumulator();
+
+      typeEnv.flush('/src/test.ts', acc);
+
+      const entries = acc.getFile('/src/test.ts');
+      expect(entries).toBeDefined();
+      const userEntry = entries!.find(e => e.varName === 'user');
+      expect(userEntry).toBeDefined();
+      expect(userEntry!.typeName).toBe('User');
+      expect(userEntry!.scope).toBe('');
+    });
+
+    it('flushes function-scoped bindings into accumulator', () => {
+      const code = `function process() {\n  const result: Response = fetch();\n}`;
+      const tree = parse(code, TypeScript.typescript);
+      const typeEnv = buildTypeEnv(tree, 'typescript');
+      const acc = new BindingAccumulator();
+
+      typeEnv.flush('/src/test.ts', acc);
+
+      const entries = acc.getFile('/src/test.ts');
+      expect(entries).toBeDefined();
+      const resultEntry = entries!.find(e => e.varName === 'result');
+      expect(resultEntry).toBeDefined();
+      expect(resultEntry!.typeName).toBe('Response');
+      expect(resultEntry!.scope).not.toBe('');
+    });
+
+    it('flushes nothing for an empty TypeEnv', () => {
+      const code = `// empty file`;
+      const tree = parse(code, TypeScript.typescript);
+      const typeEnv = buildTypeEnv(tree, 'typescript');
+      const acc = new BindingAccumulator();
+
+      typeEnv.flush('/src/empty.ts', acc);
+
+      expect(acc.getFile('/src/empty.ts')).toBeUndefined();
+    });
+
+    it('multiple files flush into same accumulator', () => {
+      const code1 = `const a: A = makeA();`;
+      const code2 = `const b: B = makeB();`;
+      const tree1 = parse(code1, TypeScript.typescript);
+      const tree2 = parse(code2, TypeScript.typescript);
+      const typeEnv1 = buildTypeEnv(tree1, 'typescript');
+      const typeEnv2 = buildTypeEnv(tree2, 'typescript');
+      const acc = new BindingAccumulator();
+
+      typeEnv1.flush('/src/a.ts', acc);
+      typeEnv2.flush('/src/b.ts', acc);
+
+      expect(acc.fileCount).toBe(2);
+      expect(acc.getFile('/src/a.ts')).toBeDefined();
+      expect(acc.getFile('/src/b.ts')).toBeDefined();
     });
   });
 });
