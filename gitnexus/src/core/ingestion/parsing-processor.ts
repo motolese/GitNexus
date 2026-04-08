@@ -159,7 +159,8 @@ const processParsingWithWorkers = async (
     if (result.ormQueries) for (const _item of result.ormQueries) allORMQueries.push(_item);
     for (const _item of result.constructorBindings) allConstructorBindings.push(_item);
     for (const _item of result.typeEnvBindings) allTypeEnvBindings.push(_item);
-    if (result.allScopeBindings) for (const _item of result.allScopeBindings) allAllScopeBindings.push(_item);
+    if (result.allScopeBindings)
+      for (const _item of result.allScopeBindings) allAllScopeBindings.push(_item);
   }
 
   // Merge and log skipped languages from workers

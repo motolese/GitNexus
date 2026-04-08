@@ -5872,7 +5872,7 @@ function process() {
 
       const entries = acc.getFile('/src/test.ts');
       expect(entries).toBeDefined();
-      const userEntry = entries!.find(e => e.varName === 'user');
+      const userEntry = entries!.find((e) => e.varName === 'user');
       expect(userEntry).toBeDefined();
       expect(userEntry!.typeName).toBe('User');
       expect(userEntry!.scope).toBe('');
@@ -5888,7 +5888,7 @@ function process() {
 
       const entries = acc.getFile('/src/test.ts');
       expect(entries).toBeDefined();
-      const resultEntry = entries!.find(e => e.varName === 'result');
+      const resultEntry = entries!.find((e) => e.varName === 'result');
       expect(resultEntry).toBeDefined();
       expect(resultEntry!.typeName).toBe('Response');
       expect(resultEntry!.scope).not.toBe('');
