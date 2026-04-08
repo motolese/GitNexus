@@ -147,4 +147,54 @@ describe('BindingAccumulator', () => {
       expect(bytes).toBeLessThan(2 * 1024 * 1024);
     });
   });
+
+  describe('pipeline integration (simulated)', () => {
+    it('deserializes allScopeBindings from worker into accumulator', () => {
+      const acc = new BindingAccumulator();
+
+      // Simulated worker output (allScopeBindings format: [scope, varName, typeName])
+      const workerBindings = [
+        {
+          filePath: 'src/service.ts',
+          bindings: [
+            ['', 'config', 'Config'] as [string, string, string],
+            ['handleRequest@15', 'db', 'Database'] as [string, string, string],
+            ['handleRequest@15', 'result', 'QueryResult'] as [string, string, string],
+          ],
+        },
+        {
+          filePath: 'src/utils.ts',
+          bindings: [['', 'logger', 'Logger'] as [string, string, string]],
+        },
+      ];
+
+      // Pipeline deserialization logic (mirrors pipeline.ts)
+      for (const { filePath, bindings } of workerBindings) {
+        const entries = bindings.map(([scope, varName, typeName]) => ({
+          scope,
+          varName,
+          typeName,
+        }));
+        acc.appendFile(filePath, entries);
+      }
+      acc.finalize();
+
+      expect(acc.fileCount).toBe(2);
+      expect(acc.totalBindings).toBe(4);
+
+      // fileScopeEntries backward compat (what ExportedTypeMap enrichment uses)
+      expect(acc.fileScopeEntries('src/service.ts')).toEqual([['config', 'Config']]);
+      expect(acc.fileScopeEntries('src/utils.ts')).toEqual([['logger', 'Logger']]);
+
+      // All-scope access (what Phase 9 will use)
+      const serviceEntries = acc.getFile('src/service.ts');
+      expect(serviceEntries).toHaveLength(3);
+      const dbEntry = serviceEntries!.find((e) => e.varName === 'db');
+      expect(dbEntry).toEqual({
+        scope: 'handleRequest@15',
+        varName: 'db',
+        typeName: 'Database',
+      });
+    });
+  });
 });
