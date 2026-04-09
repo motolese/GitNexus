@@ -1957,6 +1957,14 @@ export const resolveMemberCall = (
  * via `ctx.resolve()`. Fuzzy global resolution remains until Phase 5 replaces
  * `lookupFuzzy` with a scoped data source.
  *
+ * **Asymmetry vs `resolveCallTarget`:** `resolveFreeCall` intentionally does
+ * NOT take a `widenCache` parameter and does NOT run a D2 fuzzy-widening
+ * pass. Member calls (`resolveCallTarget`'s main body) widen via
+ * `lookupFuzzy` to reach parent-class methods defined in different files;
+ * free calls have no receiver type and rely exclusively on the tiered pool
+ * from `ctx.resolve()`. Phase 5 will revisit whether free calls need a
+ * scoped widening pass once `lookupFuzzy` is retired.
+ *
  * @param calledName  - The called function name (e.g. 'doStuff')
  * @param filePath    - File path of the call site
  * @param ctx         - Resolution context
@@ -1993,10 +2001,11 @@ export const resolveFreeCall = (
   // previously enforced by a comment ("keep this list aligned with
   // INSTANTIABLE_CLASS_TYPES") into one enforced structurally — any future
   // extension of the set (e.g. Kotlin `object`) propagates here automatically.
-  // The Swift extension dedup block below (lines ~1994-2008) deliberately
-  // uses a narrower literal `'Class' | 'Struct'` check — Swift extensions
-  // only produce Class duplicates in practice, so Record is excluded there
-  // by design. Do not collapse that site into INSTANTIABLE_CLASS_TYPES.
+  // The `dedupSwiftExtensionCandidates` helper used in the tail of this
+  // function deliberately uses a narrower literal `'Class' | 'Struct'` check
+  // — Swift extensions only produce Class duplicates in practice, so Record
+  // is excluded there by design. Do not collapse that helper into
+  // INSTANTIABLE_CLASS_TYPES.
   const hasClassTarget =
     filteredCandidates.length === 0 &&
     tiered.candidates.some((c) => INSTANTIABLE_CLASS_TYPES.has(c.type));
@@ -2004,8 +2013,35 @@ export const resolveFreeCall = (
     const staticResult = resolveStaticCall(calledName, filePath, ctx, argCount, tiered);
     if (staticResult) return staticResult;
     // Retry with constructor form: Swift/Kotlin constructor calls look like
-    // free function calls (no `new` keyword). If resolveStaticCall didn't match,
-    // re-filter with constructor form so CONSTRUCTOR_TARGET_TYPES applies.
+    // free function calls (no `new` keyword). If resolveStaticCall didn't
+    // match, re-filter with constructor form so CONSTRUCTOR_TARGET_TYPES
+    // applies.
+    //
+    // The retry fires for every null return from `resolveStaticCall`, which
+    // can happen for three distinct reasons — all three are handled below:
+    //
+    //   (a) No explicit `Constructor` node found and zero instantiable
+    //       class candidates (e.g. Interface/Trait/Impl only — the SM-12
+    //       null-route contract). `filterCallableCandidates` with
+    //       `'constructor'` form will also return nothing → we fall
+    //       through to the final null return. Correct.
+    //
+    //   (b) Homonym ambiguity — two or more instantiable class candidates
+    //       share the name (e.g. `User` in two files, same tier). The
+    //       retry repopulates `filteredCandidates` with both Classes and
+    //       they flow into `dedupSwiftExtensionCandidates` below, which
+    //       either picks the shortest-path primary or null-routes.
+    //       Covered by the R7 Swift-extension dedup test.
+    //
+    //   (c) `resolveStaticCall` step 4 bailed because the tiered pool
+    //       contains ownerless `Constructor` nodes (some extractors emit
+    //       constructors without `ownerId`). Those `Constructor` nodes
+    //       survive the constructor-form filter below and reach overload
+    //       disambiguation, giving the existing filter path a chance to
+    //       pick the right one. Correct but currently uncovered by a
+    //       dedicated test — the R5 `preComputedArgTypes` path exercises
+    //       overload disambiguation for Functions, which is structurally
+    //       the same code.
     filteredCandidates = filterCallableCandidates(tiered.candidates, argCount, 'constructor');
   }
 
