@@ -158,31 +158,51 @@ describe('LadybugDB Schema', () => {
     });
 
     it('has all FROM/TO pairs needed for HAS_METHOD edges', () => {
-      // HAS_METHOD sources: Class, Interface, Struct, Trait, Impl, Record
+      // HAS_METHOD sources: Class, Interface, Struct, Enum, Union, Trait, Impl, Record
       // HAS_METHOD targets: Method, Constructor (Property is now HAS_PROPERTY)
       const sources = ['Class', 'Interface'];
-      const backtickSources = ['Struct', 'Trait', 'Impl', 'Record'];
-      const targets = ['Method'];
-      const backtickTargets = ['Constructor'];
+      const methodBacktickSources = ['Struct', 'Enum', 'Union', 'Trait', 'Impl', 'Record'];
+      const constructorBacktickSources = ['Struct', 'Trait', 'Impl', 'Record'];
+      const methodTargets = ['Method'];
+      const constructorTargets = ['Constructor'];
 
       // Non-backtick source → non-backtick target
       for (const src of sources) {
-        for (const tgt of targets) {
+        for (const tgt of methodTargets) {
           expect(RELATION_SCHEMA).toContain(`FROM ${src} TO ${tgt}`);
         }
-        for (const tgt of backtickTargets) {
+        for (const tgt of constructorTargets) {
           expect(RELATION_SCHEMA).toContain(`FROM ${src} TO \`${tgt}\``);
         }
       }
 
-      // Backtick source → all targets
-      for (const src of backtickSources) {
-        for (const tgt of targets) {
+      // Backtick source → method targets
+      for (const src of methodBacktickSources) {
+        for (const tgt of methodTargets) {
           expect(RELATION_SCHEMA).toContain(`FROM \`${src}\` TO ${tgt}`);
         }
-        for (const tgt of backtickTargets) {
+      }
+
+      // Backtick source → constructor targets (subset only)
+      for (const src of constructorBacktickSources) {
+        for (const tgt of constructorTargets) {
           expect(RELATION_SCHEMA).toContain(`FROM \`${src}\` TO \`${tgt}\``);
         }
+      }
+    });
+
+    it('has all FROM/TO pairs needed for HAS_PROPERTY edges', () => {
+      // HAS_PROPERTY sources include enum/union containers in addition to class-like types.
+      const sources = ['Class', 'Interface'];
+      const backtickSources = ['Struct', 'Enum', 'Union', 'Trait', 'Impl', 'Record'];
+      const propertyTarget = 'Property';
+
+      for (const src of sources) {
+        expect(RELATION_SCHEMA).toContain(`FROM ${src} TO \`${propertyTarget}\``);
+      }
+
+      for (const src of backtickSources) {
+        expect(RELATION_SCHEMA).toContain(`FROM \`${src}\` TO \`${propertyTarget}\``);
       }
     });
   });

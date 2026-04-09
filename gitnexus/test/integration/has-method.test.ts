@@ -682,6 +682,46 @@ class Encapsulated {
   });
 });
 
+describe('HAS_METHOD integration — Zig containers', () => {
+  beforeAll(async () => {
+    await loadLanguage(SupportedLanguages.Zig);
+  });
+
+  it('methods in const-backed containers resolve owner from parent variable declaration', () => {
+    const code = `
+const User = struct {
+  pub fn save(self: *User) void {}
+  fn hidden(self: *User) void {}
+};
+
+const Kind = enum {
+  A,
+  B,
+  pub fn label(self: Kind) []const u8 { return "x"; }
+};
+
+pub fn helper() void {}
+`;
+    const results = parseAndExtractMethods(code, SupportedLanguages.Zig, 'src/model.zig');
+
+    const save = results.find((r) => r.name === 'save');
+    expect(save).toBeDefined();
+    expect(save!.enclosingClassId).toBe('Struct:src/model.zig:User');
+
+    const hidden = results.find((r) => r.name === 'hidden');
+    expect(hidden).toBeDefined();
+    expect(hidden!.enclosingClassId).toBe('Struct:src/model.zig:User');
+
+    const label = results.find((r) => r.name === 'label');
+    expect(label).toBeDefined();
+    expect(label!.enclosingClassId).toBe('Enum:src/model.zig:Kind');
+
+    const helper = results.find((r) => r.name === 'helper');
+    expect(helper).toBeDefined();
+    expect(helper!.enclosingClassId).toBeNull();
+  });
+});
+
 describe('HAS_METHOD integration — C# struct and record', () => {
   beforeAll(async () => {
     await loadLanguage(SupportedLanguages.CSharp);

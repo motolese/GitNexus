@@ -53,6 +53,32 @@ jobs:
             gitnexus-web/web-test-results.json
           retention-days: 5
 
+  zig-grammar-compat:
+    name: zig grammar / ${{ matrix.zig_grammar }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        zig_grammar: ['1.0.2', '1.1.2']
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: ./.github/actions/setup-gitnexus
+        with:
+          build: 'true'
+
+      - name: Pin tree-sitter-zig to matrix version
+        run: npm install --no-save @tree-sitter-grammars/tree-sitter-zig@${{ matrix.zig_grammar }}
+        working-directory: gitnexus
+
+      - name: Run Zig compatibility tests
+        run: >-
+          npx vitest run
+          test/unit/zig-grammar-compat.test.ts
+          test/unit/parser-loader.test.ts
+          test/unit/tree-sitter-queries.test.ts
+        working-directory: gitnexus
+
   cross-platform:
     name: ${{ matrix.os }}
     strategy:

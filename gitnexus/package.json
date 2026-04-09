@@ -81,6 +81,7 @@
     "tree-sitter-ruby": "^0.23.1",
     "tree-sitter-rust": "0.23.1",
     "tree-sitter-typescript": "^0.23.2",
+    "@tree-sitter-grammars/tree-sitter-zig": "1.1.2",
     "uuid": "^13.0.0"
   },
   "optionalDependencies": {
@@ -97,6 +98,7 @@
     "@types/node": "^20.0.0",
     "@types/uuid": "^10.0.0",
     "@vitest/coverage-v8": "^4.0.18",
+    "graphology-types": "^0.24.8",
     "tsx": "^4.0.0",
     "typescript": "^5.4.5",
     "vitest": "^4.0.18"

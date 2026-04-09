@@ -1174,7 +1174,96 @@ export const DART_QUERIES = `
       (type_identifier) @heritage.trait))) @heritage
 `;
 
+// Zig queries - works with tree-sitter-zig
+//
+// NOTE: tree-sitter-zig has parser-version drift across 1.0.x and 1.1.x.
+// Keep profile-specific constants separate so the runtime can branch by
+// installed grammar version when needed.
+export const ZIG_QUERIES_V1_0 = `
+; Top-level containers are usually const Name = struct/enum/union/opaque
+(variable_declaration
+  (identifier) @name
+  (struct_declaration)) @definition.struct
+
+(variable_declaration
+  (identifier) @name
+  (enum_declaration)) @definition.enum
+
+(variable_declaration
+  (identifier) @name
+  (union_declaration)) @definition.union
+
+(variable_declaration
+  (identifier) @name
+  (opaque_declaration)) @definition.class
+
+; Top-level functions
+(source_file
+  (function_declaration
+    name: (identifier) @name) @definition.function)
+
+; Methods inside containers
+(variable_declaration
+  (identifier)
+  (struct_declaration
+    (function_declaration
+      name: (identifier) @name) @definition.method))
+
+(variable_declaration
+  (identifier)
+  (enum_declaration
+    (function_declaration
+      name: (identifier) @name) @definition.method))
+
+(variable_declaration
+  (identifier)
+  (union_declaration
+    (function_declaration
+      name: (identifier) @name) @definition.method))
+
+(variable_declaration
+  (identifier)
+  (opaque_declaration
+    (function_declaration
+      name: (identifier) @name) @definition.method))
+
+; Container fields/properties
+(container_field
+  name: (identifier) @name) @definition.property
+
+; Imports: const alias = @import("path")
+(variable_declaration
+  (identifier) @name
+  (builtin_function
+    (builtin_identifier) @_fn
+    (arguments
+      (string
+        (string_content) @import.source)))
+  (#eq? @_fn "@import")) @import
+
+; Calls: free function and member calls
+(call_expression
+  function: (identifier) @call.name) @call
+
+(call_expression
+  function: (field_expression
+    member: (identifier) @call.name)) @call
+`;
+
+// For now 1.1+ shares the same canonical patterns. Keep this alias explicit
+// so parser-profile branching remains transparent and testable.
+export const ZIG_QUERIES_V1_1 = ZIG_QUERIES_V1_0;
+
+export const getZigQueriesForProfile = (profile: ZigQueryProfile): string =>
+  profile === 'zig-1.0' ? ZIG_QUERIES_V1_0 : ZIG_QUERIES_V1_1;
+
+export const getZigQueriesForRuntime = (): string =>
+  getZigQueriesForProfile(getZigGrammarRuntimeInfo().queryProfile);
+
+export const ZIG_QUERIES = getZigQueriesForRuntime();
+
 import { SupportedLanguages } from 'gitnexus-shared';
+import { getZigGrammarRuntimeInfo, type ZigQueryProfile } from '../tree-sitter/zig-grammar-version.js';
 
 export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.TypeScript]: TYPESCRIPT_QUERIES,
@@ -1191,6 +1280,7 @@ export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {
   [SupportedLanguages.Ruby]: RUBY_QUERIES,
   [SupportedLanguages.Swift]: SWIFT_QUERIES,
   [SupportedLanguages.Dart]: DART_QUERIES,
+  [SupportedLanguages.Zig]: ZIG_QUERIES,
   [SupportedLanguages.Vue]: TYPESCRIPT_QUERIES, // Vue <script> blocks are parsed as TypeScript
   [SupportedLanguages.Cobol]: '', // Standalone regex processor — no tree-sitter queries
 };

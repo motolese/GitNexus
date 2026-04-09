@@ -12,9 +12,19 @@ import PHP from 'tree-sitter-php';
 import Ruby from 'tree-sitter-ruby';
 import { createRequire } from 'node:module';
 import { SupportedLanguages } from 'gitnexus-shared';
+import { getZigGrammarRuntimeInfo, warnIfUnexpectedZigGrammarVersion } from './zig-grammar-version.js';
 
 // tree-sitter-swift and tree-sitter-dart are optionalDependencies — may not be installed
 const _require = createRequire(import.meta.url);
+const zigGrammarRuntime = getZigGrammarRuntimeInfo();
+let Zig: any = null;
+try {
+  Zig = _require('@tree-sitter-grammars/tree-sitter-zig');
+  // Version gate: keep parser loading aligned with runtime query profile selection.
+  if (zigGrammarRuntime.installedVersion) {
+    warnIfUnexpectedZigGrammarVersion('parser-loader');
+  }
+} catch {}
 let Swift: any = null;
 try {
   Swift = _require('tree-sitter-swift');
@@ -49,10 +59,13 @@ const languageMap: Record<string, any> = {
   [SupportedLanguages.Vue]: TypeScript.typescript,
   ...(Dart ? { [SupportedLanguages.Dart]: Dart } : {}),
   ...(Swift ? { [SupportedLanguages.Swift]: Swift } : {}),
+  ...(Zig ? { [SupportedLanguages.Zig]: Zig } : {}),
 };
 
 export const isLanguageAvailable = (language: SupportedLanguages): boolean =>
   language in languageMap;
+
+export const getZigGrammarRuntime = () => zigGrammarRuntime;
 
 export const loadParser = async (): Promise<Parser> => {
   if (parser) return parser;

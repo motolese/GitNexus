@@ -220,3 +220,23 @@ describe('resolveImportPath — no proximity for Java or TypeScript', () => {
     expect(result).toBe('src/services/user.ts');
   });
 });
+
+describe('resolveImportPath — Zig import compatibility', () => {
+  it('resolves bare file-style Zig import without leading ./ (module.zig)', () => {
+    const ctx = makeCtx(['src/main.zig', 'src/module.zig']);
+    const result = resolve('src/main.zig', 'module.zig', SupportedLanguages.Zig, ctx);
+    expect(result).toBe('src/module.zig');
+  });
+
+  it('resolves explicit relative Zig import (./module.zig)', () => {
+    const ctx = makeCtx(['src/main.zig', 'src/module.zig']);
+    const result = resolve('src/main.zig', './module.zig', SupportedLanguages.Zig, ctx);
+    expect(result).toBe('src/module.zig');
+  });
+
+  it('keeps Zig std import unresolved (no local file mapping)', () => {
+    const ctx = makeCtx(['src/main.zig', 'src/module.zig']);
+    const result = resolve('src/main.zig', 'std', SupportedLanguages.Zig, ctx);
+    expect(result).toBeNull();
+  });
+});

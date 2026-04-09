@@ -311,6 +311,18 @@ export function detectFrameworkFromPath(filePath: string): FrameworkHint | null 
     return { framework: 'rust', entryPointMultiplier: 2.5, reason: 'rust-bin' };
   }
 
+  // ========== ZIG ==========
+
+  // Zig main executable entry point
+  if (p.endsWith('/main.zig')) {
+    return { framework: 'zig', entryPointMultiplier: 3.0, reason: 'zig-main' };
+  }
+
+  // Zig bin folder executables
+  if (p.includes('/bin/') && p.endsWith('.zig')) {
+    return { framework: 'zig', entryPointMultiplier: 2.5, reason: 'zig-bin' };
+  }
+
   // ========== C / C++ ==========
 
   // C/C++ main files
@@ -891,6 +903,7 @@ export const AST_FRAMEWORK_PATTERNS_BY_LANGUAGE = {
       patterns: FRAMEWORK_AST_PATTERNS.riverpod,
     },
   ],
+  [SupportedLanguages.Zig]: [], // Zig has no framework-specific AST patterns
   [SupportedLanguages.Vue]: [], // Vue uses TypeScript AST framework detection
   [SupportedLanguages.Cobol]: [], // Standalone regex processor — no AST framework patterns
 } satisfies Record<SupportedLanguages, AstFrameworkPatternConfig[]>;
