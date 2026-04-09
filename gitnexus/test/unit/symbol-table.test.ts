@@ -2708,4 +2708,65 @@ describe('resolveFreeCall', () => {
     expect(result).not.toBeNull();
     expect(result!.nodeId).toBe('class:User:primary');
   });
+
+  // -------------------------------------------------------------------------
+  // PR #756 final review follow-up (comment 4215739052):
+  //   - Finding #3 low: ownerless-Constructor retry path (previously covered
+  //     by comment only) — adds the concrete test the reviewer asked for.
+  //   - Low-severity coverage gap: PHP free function (from the language
+  //     coverage table in the same review).
+  // -------------------------------------------------------------------------
+
+  it('routes through resolveStaticCall retry when tiered pool contains an ownerless Constructor (free-form)', () => {
+    // This exercises the third null-return reason documented in the retry
+    // comment inside resolveFreeCall: resolveStaticCall's step-4 bailout when
+    // the tiered pool contains Constructor nodes that lack ownerId (common in
+    // some extractors). In that case:
+    //   1. resolveStaticCall step 3 walks classCandidates via lookupMethodByOwner
+    //      — the ownerless Constructor is NOT in methodByOwner, so nothing found.
+    //   2. Step 4 detects the Constructor in the tiered pool and bails out
+    //      with null so filterCallableCandidates can handle Constructor-vs-
+    //      Class preference correctly.
+    //   3. resolveFreeCall's retry re-runs filterCallableCandidates with
+    //      'constructor' form, which — per CONSTRUCTOR_TARGET_TYPES — prefers
+    //      the Constructor node over the Class node.
+    //   4. Single survivor → returned as the call target.
+    ctx.symbols.add('src/user.ts', 'User', 'class:User', 'Class');
+    ctx.symbols.add('src/user.ts', 'User', 'ctor:User:ownerless', 'Constructor', {
+      parameterCount: 0,
+      // No ownerId — this is the pathological extractor output the retry path
+      // exists to handle.
+    });
+    ctx.importMap.set('src/app.ts', new Set(['src/user.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'User', callForm: 'free' },
+      'src/app.ts',
+      ctx,
+    );
+
+    // The Constructor survives filterCallableCandidates's 'constructor' form
+    // filter and is preferred over the Class (CONSTRUCTOR_TARGET_TYPES puts
+    // Constructor first). Guards the (c) case in the retry-reasons comment.
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('ctor:User:ownerless');
+  });
+
+  it('resolves a PHP free function (top-level helper())', () => {
+    // PHP allows top-level function definitions outside any class. The
+    // language coverage table in PR #756 review flagged this as uncovered;
+    // this test exercises the `.php` dispatch path for free calls. Matches
+    // the shape of the existing Go/Python/Rust/Java/JS language tests above.
+    ctx.symbols.add('src/helpers.php', 'helper', 'func:php:helper', 'Function');
+    ctx.importMap.set('src/app.php', new Set(['src/helpers.php']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free' },
+      'src/app.php',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:php:helper');
+  });
 });
