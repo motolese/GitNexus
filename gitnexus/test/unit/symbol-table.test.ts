@@ -1417,6 +1417,7 @@ describe('lookupMethodByOwnerWithMRO', () => {
 import {
   _resolveCallTargetForTesting,
   resolveMemberCall,
+  resolveFreeCall,
   type OverloadHints,
 } from '../../src/core/ingestion/call-processor.js';
 
@@ -2327,5 +2328,123 @@ describe('resolveStaticCall', () => {
 
     expect(result).not.toBeNull();
     expect(result!.nodeId).toBe('ctor:User:2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveFreeCall — SM-13: free-function call resolution
+// ---------------------------------------------------------------------------
+
+describe('resolveFreeCall', () => {
+  let ctx: ResolutionContext;
+
+  beforeEach(() => {
+    ctx = createResolutionContext();
+  });
+
+  it('resolves a free function call via import-scoped resolution', () => {
+    ctx.symbols.add('src/utils.ts', 'doStuff', 'func:doStuff', 'Function');
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const result = resolveFreeCall('doStuff', 'src/app.ts', ctx);
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:doStuff');
+    expect(result!.confidence).toBe(0.9); // import-scoped tier
+    expect(result!.reason).toBe('import-resolved');
+  });
+
+  it('resolves a free function call via same-file resolution', () => {
+    ctx.symbols.add('src/app.ts', 'helper', 'func:helper', 'Function');
+
+    const result = resolveFreeCall('helper', 'src/app.ts', ctx);
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:helper');
+    expect(result!.confidence).toBe(0.95); // same-file tier
+    expect(result!.reason).toBe('same-file');
+  });
+
+  it('returns null when no candidates exist', () => {
+    const result = resolveFreeCall('nonexistent', 'src/app.ts', ctx);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for ambiguous free function calls (multiple candidates)', () => {
+    ctx.symbols.add('src/a.ts', 'doStuff', 'func:a:doStuff', 'Function');
+    ctx.symbols.add('src/b.ts', 'doStuff', 'func:b:doStuff', 'Function');
+    ctx.importMap.set('src/app.ts', new Set(['src/a.ts', 'src/b.ts']));
+
+    const result = resolveFreeCall('doStuff', 'src/app.ts', ctx);
+
+    expect(result).toBeNull();
+  });
+
+  it('delegates to resolveStaticCall for free-form class targets (Swift/Kotlin)', () => {
+    ctx.symbols.add('src/user.swift', 'User', 'class:User', 'Class');
+    ctx.importMap.set('src/app.swift', new Set(['src/user.swift']));
+
+    const result = resolveFreeCall('User', 'src/app.swift', ctx);
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('class:User');
+  });
+
+  it('delegates to resolveStaticCall for Record free-form targets (C#/Kotlin)', () => {
+    ctx.symbols.add('src/User.cs', 'User', 'record:cs:User', 'Record');
+    ctx.importMap.set('src/App.cs', new Set(['src/User.cs']));
+
+    const result = resolveFreeCall('User', 'src/App.cs', ctx);
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('record:cs:User');
+  });
+
+  it('null-routes Trait free-form calls via resolveStaticCall', () => {
+    ctx.symbols.add('src/timestamps.php', 'HasTimestamps', 'trait:HasTimestamps', 'Trait');
+    ctx.importMap.set('src/model.php', new Set(['src/timestamps.php']));
+
+    const result = resolveFreeCall('HasTimestamps', 'src/model.php', ctx);
+
+    expect(result).toBeNull();
+  });
+
+  it('uses tieredOverride when provided', () => {
+    ctx.symbols.add('src/utils.ts', 'doStuff', 'func:doStuff', 'Function');
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const tiered = ctx.resolve('doStuff', 'src/app.ts');
+    expect(tiered).not.toBeNull();
+
+    // Spy on ctx.resolve to verify it is NOT called again
+    const originalResolve = ctx.resolve.bind(ctx);
+    let resolveCallCount = 0;
+    ctx.resolve = ((name: string, fromFile: string) => {
+      resolveCallCount++;
+      return originalResolve(name, fromFile);
+    }) as typeof ctx.resolve;
+
+    const result = resolveFreeCall('doStuff', 'src/app.ts', ctx, undefined, tiered!);
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:doStuff');
+    expect(resolveCallCount).toBe(0);
+  });
+
+  it('routes through resolveCallTarget for free-form calls', () => {
+    ctx.symbols.add('src/utils.ts', 'doStuff', 'func:doStuff', 'Function');
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      {
+        calledName: 'doStuff',
+        callForm: 'free',
+      },
+      'src/app.ts',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:doStuff');
   });
 });

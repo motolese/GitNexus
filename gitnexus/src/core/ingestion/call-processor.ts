@@ -1370,6 +1370,20 @@ const resolveCallTarget = (
   const tiered = ctx.resolve(call.calledName, currentFile);
   if (!tiered) return null;
 
+  // SM-13: Free function calls route through resolveFreeCall.
+  // Handles pure free calls (foo()) and Swift/Kotlin implicit constructors (User()).
+  if (call.callForm === 'free') {
+    return resolveFreeCall(
+      call.calledName,
+      currentFile,
+      ctx,
+      call.argCount,
+      tiered,
+      overloadHints,
+      preComputedArgTypes,
+    );
+  }
+
   let filteredCandidates = filterCallableCandidates(
     tiered.candidates,
     call.argCount,
@@ -1377,13 +1391,10 @@ const resolveCallTarget = (
   );
 
   // S0. Constructor/static fast path (SM-12): O(1) class + constructor lookup
-  //     via lookupClassByName + lookupMethodByOwner before falling back to the
-  //     existing filtering + fuzzy-widening path. Falls back to the class node
-  //     itself when no Constructor symbol is indexed for the type.
-  //
-  //     Handles:
-  //     (a) callForm === 'constructor' — explicit `new User()` in Java/TS/C#/etc.
-  //     (b) callForm === 'free' with class target — implicit `User()` in Swift/Kotlin
+  //     via lookupClassByName + lookupMethodByOwner.
+  //     Handles callForm === 'constructor' — explicit `new User()` in Java/TS/C#/etc.
+  //     Free-form class targets (Swift/Kotlin `User()`) are handled by
+  //     resolveFreeCall above (SM-13).
   //
   //     Known gaps (handled by the existing tail fallback at the bottom of
   //     this function, not S0):
@@ -1392,21 +1403,7 @@ const resolveCallTarget = (
   //       S0 to cover them would require threading receiver-type resolution
   //       through the module-alias logic; revisit if it shows up as a hot
   //       spot.
-  //
-  //     The `.some()` trigger below must stay aligned with
-  //     `INSTANTIABLE_CLASS_TYPES` — any type admitted here that is not in
-  //     that set will cause S0 → `resolveStaticCall` to run and return null,
-  //     wasting two lookup passes per call. `Enum` is deliberately excluded
-  //     (same rationale as `INSTANTIABLE_CLASS_TYPES`); `Record` is included
-  //     so C# records and Kotlin data classes reach the fast path.
-  const freeFormHasClassTarget =
-    call.callForm === 'free' &&
-    filteredCandidates.length === 0 &&
-    tiered.candidates.some((c) => c.type === 'Class' || c.type === 'Struct' || c.type === 'Record');
-  if (call.callForm === 'constructor' || freeFormHasClassTarget) {
-    // Reuse the pre-computed `tiered` result — resolveStaticCall's class name
-    // is identical to `call.calledName` here, so re-running ctx.resolve would
-    // duplicate the tiered-lookup work performed at the top of this function.
+  if (call.callForm === 'constructor') {
     const staticResult = resolveStaticCall(
       call.calledName,
       currentFile,
@@ -1415,22 +1412,6 @@ const resolveCallTarget = (
       tiered,
     );
     if (staticResult) return staticResult;
-  }
-
-  // Swift/Kotlin: constructor calls look like free function calls (no `new` keyword).
-  // If free-form filtering found no callable candidates but the symbol resolves to a
-  // Class/Struct, retry with constructor form so CONSTRUCTOR_TARGET_TYPES applies.
-  if (filteredCandidates.length === 0 && call.callForm === 'free') {
-    // `freeFormHasClassTarget` was already computed for the S0 fast path
-    // above under the same `callForm === 'free' && filteredCandidates.length === 0`
-    // precondition. Reuse it to avoid a second `.some()` scan on the same pool.
-    if (freeFormHasClassTarget) {
-      filteredCandidates = filterCallableCandidates(
-        tiered.candidates,
-        call.argCount,
-        'constructor',
-      );
-    }
   }
 
   // Module-qualified constructor pattern: e.g. Python `import models; models.User()`.
@@ -1927,6 +1908,110 @@ export const resolveMemberCall = (
   );
   if (!resolved) return null;
   return toResolveResult(resolved.def, resolved.tier);
+};
+
+// ---------------------------------------------------------------------------
+// SM-13: Free-function call resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a free-function call using `lookupExact` (same-file) + import-scoped
+ * resolution via `ctx.resolve()`.
+ *
+ * Used for `foo()`, `doStuff()` — unqualified calls with no receiver.
+ * Also handles Swift/Kotlin implicit constructors (`User()` without `new`)
+ * by delegating to {@link resolveStaticCall} when the tiered pool contains
+ * class-like targets.
+ *
+ * {@link resolveCallTarget} delegates here for `callForm === 'free'` before
+ * processing constructor and member calls.
+ *
+ * **Design note (SM-13):** This path still falls through to Tier 3 (global)
+ * via `ctx.resolve()`. Fuzzy global resolution remains until Phase 5 replaces
+ * `lookupFuzzy` with a scoped data source.
+ *
+ * @param calledName  - The called function name (e.g. 'doStuff')
+ * @param filePath    - File path of the call site
+ * @param ctx         - Resolution context
+ * @param argCount    - Optional argument count for arity filtering
+ * @param tieredOverride - Pre-computed tiered candidates from an upstream
+ *                       `ctx.resolve` call. When provided, skips the redundant
+ *                       lookup inside this function.
+ * @param overloadHints  - Optional AST-based overload disambiguation hints
+ * @param preComputedArgTypes - Optional pre-computed argument types (worker path)
+ */
+export const resolveFreeCall = (
+  calledName: string,
+  filePath: string,
+  ctx: ResolutionContext,
+  argCount?: number,
+  tieredOverride?: TieredCandidates,
+  overloadHints?: OverloadHints,
+  preComputedArgTypes?: (string | undefined)[],
+): ResolveResult | null => {
+  const tiered = tieredOverride ?? ctx.resolve(calledName, filePath);
+  if (!tiered) return null;
+
+  let filteredCandidates = filterCallableCandidates(
+    tiered.candidates,
+    argCount,
+    'free',
+  );
+
+  // Class-target fast path: Swift/Kotlin `User()` — free-form call targeting a
+  // class. Delegates to resolveStaticCall for O(1) class + constructor lookup.
+  // The `.some()` trigger must stay aligned with `INSTANTIABLE_CLASS_TYPES` —
+  // any type admitted here that is not in that set will cause resolveStaticCall
+  // to return null, wasting two lookup passes per call. `Enum` is deliberately
+  // excluded; `Record` is included so C# records and Kotlin data classes reach
+  // the fast path.
+  const hasClassTarget =
+    filteredCandidates.length === 0 &&
+    tiered.candidates.some((c) => c.type === 'Class' || c.type === 'Struct' || c.type === 'Record');
+  if (hasClassTarget) {
+    const staticResult = resolveStaticCall(calledName, filePath, ctx, argCount, tiered);
+    if (staticResult) return staticResult;
+    // Retry with constructor form: Swift/Kotlin constructor calls look like
+    // free function calls (no `new` keyword). If resolveStaticCall didn't match,
+    // re-filter with constructor form so CONSTRUCTOR_TARGET_TYPES applies.
+    filteredCandidates = filterCallableCandidates(
+      tiered.candidates,
+      argCount,
+      'constructor',
+    );
+  }
+
+  // E. Overload disambiguation
+  if (filteredCandidates.length > 1) {
+    const disambiguated = overloadHints
+      ? tryOverloadDisambiguation(filteredCandidates, overloadHints)
+      : preComputedArgTypes
+        ? matchCandidatesByArgTypes(filteredCandidates, preComputedArgTypes)
+        : null;
+    if (disambiguated) return toResolveResult(disambiguated, tiered.tier);
+  }
+
+  if (filteredCandidates.length !== 1) {
+    // Deduplicate: Swift extensions create multiple Class nodes with the same name.
+    // When all candidates share the same type and differ only by file (extension vs
+    // primary definition), they represent the same symbol. Prefer the primary
+    // definition (shortest file path).
+    if (filteredCandidates.length > 1) {
+      const allSameType = filteredCandidates.every((c) => c.type === filteredCandidates[0].type);
+      if (
+        allSameType &&
+        (filteredCandidates[0].type === 'Class' || filteredCandidates[0].type === 'Struct')
+      ) {
+        const sorted = [...filteredCandidates].sort(
+          (a, b) => a.filePath.length - b.filePath.length,
+        );
+        return toResolveResult(sorted[0], tiered.tier);
+      }
+    }
+    return null;
+  }
+
+  return toResolveResult(filteredCandidates[0], tiered.tier);
 };
 
 // ---------------------------------------------------------------------------
