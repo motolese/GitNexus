@@ -1952,11 +1952,7 @@ export const resolveFreeCall = (
   const tiered = tieredOverride ?? ctx.resolve(calledName, filePath);
   if (!tiered) return null;
 
-  let filteredCandidates = filterCallableCandidates(
-    tiered.candidates,
-    argCount,
-    'free',
-  );
+  let filteredCandidates = filterCallableCandidates(tiered.candidates, argCount, 'free');
 
   // Class-target fast path: Swift/Kotlin `User()` — free-form call targeting a
   // class. Delegates to resolveStaticCall for O(1) class + constructor lookup.
@@ -1965,20 +1961,25 @@ export const resolveFreeCall = (
   // to return null, wasting two lookup passes per call. `Enum` is deliberately
   // excluded; `Record` is included so C# records and Kotlin data classes reach
   // the fast path.
+  // Align with INSTANTIABLE_CLASS_TYPES by reusing the set directly rather
+  // than enumerating literal strings. This converts an invariant that was
+  // previously enforced by a comment ("keep this list aligned with
+  // INSTANTIABLE_CLASS_TYPES") into one enforced structurally — any future
+  // extension of the set (e.g. Kotlin `object`) propagates here automatically.
+  // The Swift extension dedup block below (lines ~1994-2008) deliberately
+  // uses a narrower literal `'Class' | 'Struct'` check — Swift extensions
+  // only produce Class duplicates in practice, so Record is excluded there
+  // by design. Do not collapse that site into INSTANTIABLE_CLASS_TYPES.
   const hasClassTarget =
     filteredCandidates.length === 0 &&
-    tiered.candidates.some((c) => c.type === 'Class' || c.type === 'Struct' || c.type === 'Record');
+    tiered.candidates.some((c) => INSTANTIABLE_CLASS_TYPES.has(c.type));
   if (hasClassTarget) {
     const staticResult = resolveStaticCall(calledName, filePath, ctx, argCount, tiered);
     if (staticResult) return staticResult;
     // Retry with constructor form: Swift/Kotlin constructor calls look like
     // free function calls (no `new` keyword). If resolveStaticCall didn't match,
     // re-filter with constructor form so CONSTRUCTOR_TARGET_TYPES applies.
-    filteredCandidates = filterCallableCandidates(
-      tiered.candidates,
-      argCount,
-      'constructor',
-    );
+    filteredCandidates = filterCallableCandidates(tiered.candidates, argCount, 'constructor');
   }
 
   // E. Overload disambiguation

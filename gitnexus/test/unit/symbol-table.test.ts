@@ -2447,4 +2447,265 @@ describe('resolveFreeCall', () => {
     expect(result).not.toBeNull();
     expect(result!.nodeId).toBe('func:doStuff');
   });
+
+  // -------------------------------------------------------------------------
+  // PR #756 review follow-up (plan 2026-04-09-003): language coverage,
+  // arity threading, Tier 3 resolution, preComputedArgTypes worker path,
+  // Enum null-route, and Swift extension dedup guard.
+  // -------------------------------------------------------------------------
+
+  // R2 — Language coverage: Go, Python, Rust, Java, JavaScript free-function
+  // dispatch through _resolveCallTargetForTesting. resolveFreeCall has no
+  // file-extension branching; these guard the dispatch chain per language.
+
+  it('resolves a Go free function (doStuff())', () => {
+    ctx.symbols.add('src/helper.go', 'doStuff', 'func:go:doStuff', 'Function');
+    ctx.importMap.set('src/main.go', new Set(['src/helper.go']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'doStuff', callForm: 'free' },
+      'src/main.go',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:go:doStuff');
+  });
+
+  it('resolves a Python free function (def helper(): ... helper())', () => {
+    ctx.symbols.add('helpers.py', 'helper', 'func:py:helper', 'Function');
+    ctx.importMap.set('app.py', new Set(['helpers.py']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free' },
+      'app.py',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:py:helper');
+  });
+
+  it('resolves a Rust free function outside any impl block (free_fn())', () => {
+    ctx.symbols.add('src/helpers.rs', 'free_fn', 'func:rs:free_fn', 'Function');
+    ctx.importMap.set('src/main.rs', new Set(['src/helpers.rs']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'free_fn', callForm: 'free' },
+      'src/main.rs',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:rs:free_fn');
+  });
+
+  it('resolves a Java statically-imported function (doStuff() after import static Utils.doStuff)', () => {
+    // Note: this simulates the extractor output post static import by
+    // indexing the function directly in its declaring file. The test guards
+    // the dispatch chain for .java files, not the extractor's handling of
+    // static imports specifically.
+    ctx.symbols.add('src/Utils.java', 'doStuff', 'func:java:doStuff', 'Function');
+    ctx.importMap.set('src/App.java', new Set(['src/Utils.java']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'doStuff', callForm: 'free' },
+      'src/App.java',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:java:doStuff');
+  });
+
+  it('resolves a JavaScript module-level function (moduleFn())', () => {
+    ctx.symbols.add('src/helpers.js', 'moduleFn', 'func:js:moduleFn', 'Function');
+    ctx.importMap.set('src/app.js', new Set(['src/helpers.js']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'moduleFn', callForm: 'free' },
+      'src/app.js',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:js:moduleFn');
+  });
+
+  // R3 — Arity filtering: call.argCount must narrow overloaded free functions
+  // differing only in parameter count.
+
+  it('narrows overloaded free functions by argCount (2-arg overload selected)', () => {
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:0', 'Function', {
+      parameterCount: 0,
+    });
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:2', 'Function', {
+      parameterCount: 2,
+    });
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free', argCount: 2 },
+      'src/app.ts',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:helper:2');
+  });
+
+  it('narrows overloaded free functions by argCount (0-arg overload selected)', () => {
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:0', 'Function', {
+      parameterCount: 0,
+    });
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:2', 'Function', {
+      parameterCount: 2,
+    });
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free', argCount: 0 },
+      'src/app.ts',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:helper:0');
+  });
+
+  // R4 — Tier 3 (global) resolution: function globally visible but not
+  // imported. Locks in TIER_CONFIDENCE.global === 0.5 and reason === 'global'
+  // so a silent tier-table refactor surfaces here.
+
+  it('resolves a globally-visible free function via Tier 3 with global confidence', () => {
+    ctx.symbols.add('lib/global.ts', 'helper', 'func:global:helper', 'Function');
+    // No importMap entry — must fall through to Tier 3 (global).
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free' },
+      'src/app.ts',
+      ctx,
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:global:helper');
+    expect(result!.confidence).toBe(0.5); // TIER_CONFIDENCE.global
+    expect(result!.reason).toBe('global');
+  });
+
+  // R5 — preComputedArgTypes worker path: when parse-worker pre-computes
+  // argument types, the disambiguation routes through matchCandidatesByArgTypes.
+  // Preconditions (verified at feasibility review):
+  //   1. filteredCandidates.length > 1 — both overloads must survive arity
+  //      filtering, so argCount left unset here.
+  //   2. overloadHints must be undefined — it takes precedence over
+  //      preComputedArgTypes at the disambiguation site.
+
+  it('disambiguates overloads via preComputedArgTypes (String overload matched)', () => {
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:str', 'Function', {
+      parameterCount: 1,
+      parameterTypes: ['String'],
+    });
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:int', 'Function', {
+      parameterCount: 1,
+      parameterTypes: ['Int'],
+    });
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free', argCount: 1 },
+      'src/app.ts',
+      ctx,
+      { preComputedArgTypes: ['String'] },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:helper:str');
+  });
+
+  it('disambiguates overloads via preComputedArgTypes (Int overload matched)', () => {
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:str', 'Function', {
+      parameterCount: 1,
+      parameterTypes: ['String'],
+    });
+    ctx.symbols.add('src/utils.ts', 'helper', 'func:helper:int', 'Function', {
+      parameterCount: 1,
+      parameterTypes: ['Int'],
+    });
+    ctx.importMap.set('src/app.ts', new Set(['src/utils.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'helper', callForm: 'free', argCount: 1 },
+      'src/app.ts',
+      ctx,
+      // `Int` is normalized to `int` on the stored side via normalizeJvmTypeName
+      // (matchCandidatesByArgTypes:1287). Real parse-worker-emitted argTypes are
+      // already lowercase primitive names inferred from literals, so this
+      // mirrors production call-site shape.
+      { preComputedArgTypes: ['int'] },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('func:helper:int');
+  });
+
+  // R6 — Enum free-form null-route: locks in the current behavior that
+  // `Color()`-style calls on Enum types return null because Enum is
+  // deliberately excluded from INSTANTIABLE_CLASS_TYPES. This is intentional
+  // per PR #754 round 1 (see `call-processor.ts` INSTANTIABLE_CLASS_TYPES
+  // JSDoc — "Enum excluded pending language-specific support with motivating
+  // test fixtures"). If a future extension adds Enum to the set, this test
+  // will need to be updated alongside that work — that is the correct signal.
+
+  it('null-routes Enum free-form calls (Color() — no instantiable fallback)', () => {
+    ctx.symbols.add('src/color.ts', 'Color', 'enum:Color', 'Enum');
+    ctx.importMap.set('src/app.ts', new Set(['src/color.ts']));
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'Color', callForm: 'free' },
+      'src/app.ts',
+      ctx,
+    );
+
+    // Enum not in INSTANTIABLE_CLASS_TYPES → hasClassTarget is false →
+    // resolveStaticCall is not called → tail dedup also doesn't fire →
+    // falls through to the final null return.
+    expect(result).toBeNull();
+  });
+
+  // R7 — Swift extension dedup `filePath.length` heuristic guard:
+  // Two same-name Class entries at different path lengths. The free-form
+  // dispatch chain goes:
+  //   1. filterCallableCandidates(tiered, argCount, 'free') strips Class →
+  //      filteredCandidates.length === 0
+  //   2. hasClassTarget is true (both are Class)
+  //   3. resolveStaticCall runs, has 2 homonym Class candidates →
+  //      instantiableCandidates.length > 1 → returns null (SM-12 round-1
+  //      null-route contract)
+  //   4. Constructor-form retry: filterCallableCandidates(tiered, argCount,
+  //      'constructor') keeps Class entries → filteredCandidates.length === 2
+  //   5. Falls through to the Swift extension dedup block → sorts by
+  //      filePath.length → returns the shortest path.
+
+  it('dedupes Swift extension candidates by shortest file path (free-form retry path)', () => {
+    // Two same-name Class entries, different path lengths.
+    ctx.symbols.add('src/User.swift', 'User', 'class:User:primary', 'Class');
+    ctx.symbols.add('src/Extensions/UserExtensions.swift', 'User', 'class:User:extension', 'Class');
+    ctx.importMap.set(
+      'src/App.swift',
+      new Set(['src/User.swift', 'src/Extensions/UserExtensions.swift']),
+    );
+
+    const result = _resolveCallTargetForTesting(
+      { calledName: 'User', callForm: 'free' },
+      'src/App.swift',
+      ctx,
+    );
+
+    // The shortest file path wins per the existing heuristic. This is a
+    // behavior guard for finding #4 in the PR #756 review — if the dedup
+    // heuristic changes, this test surfaces that intent.
+    expect(result).not.toBeNull();
+    expect(result!.nodeId).toBe('class:User:primary');
+  });
 });
