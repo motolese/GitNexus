@@ -1318,6 +1318,44 @@ const tryOverloadDisambiguation = (
 };
 
 /**
+ * Collapse Swift-extension duplicate Class/Struct candidates to the primary
+ * definition, preferring the shortest file path.
+ *
+ * Swift extensions (`extension User { ... }` in a separate file) create
+ * multiple `Class` nodes sharing the same symbol name — one for the primary
+ * declaration and one per extension file. When overload disambiguation and
+ * receiver narrowing both fail to converge on a single candidate, this
+ * heuristic picks the primary definition based on the assumption that it
+ * lives at the shortest file path (e.g. `User.swift` over `UserExtensions.swift`).
+ *
+ * Intentionally narrower than {@link INSTANTIABLE_CLASS_TYPES}: only `Class`
+ * and `Struct` are considered, not `Record`. Swift extensions only produce
+ * `Class` duplicates in practice, and C#/Kotlin records do not exhibit the
+ * same multi-file-definition pattern, so widening this set risks accidental
+ * dedup of legitimately distinct record types.
+ *
+ * Returns a `ResolveResult` when the heuristic fires, `null` when the
+ * candidate pool does not match the shape (mixed types, non-Class/Struct
+ * kinds, or `length <= 1`). Callers should fall through to their own null
+ * return when this helper returns `null`.
+ *
+ * Shared between `resolveCallTarget` and `resolveFreeCall` — SM-13 originally
+ * duplicated this block into both functions. Having a single source of truth
+ * prevents the two copies from drifting if the heuristic is ever tuned.
+ */
+const dedupSwiftExtensionCandidates = (
+  candidates: readonly SymbolDefinition[],
+  tier: ResolutionTier,
+): ResolveResult | null => {
+  if (candidates.length <= 1) return null;
+  const allSameType = candidates.every((c) => c.type === candidates[0].type);
+  if (!allSameType) return null;
+  if (candidates[0].type !== 'Class' && candidates[0].type !== 'Struct') return null;
+  const sorted = [...candidates].sort((a, b) => a.filePath.length - b.filePath.length);
+  return toResolveResult(sorted[0], tier);
+};
+
+/**
  * Resolve a function call to its target node ID using priority strategy:
  * A. Narrow candidates by scope tier via ctx.resolve()
  * B. Filter to callable symbol kinds (constructor-aware when callForm is set)
@@ -1591,22 +1629,11 @@ const resolveCallTarget = (
   }
 
   if (filteredCandidates.length !== 1) {
-    // Deduplicate: Swift extensions create multiple Class nodes with the same name.
-    // When all candidates share the same type and differ only by file (extension vs
-    // primary definition), they represent the same symbol. Prefer the primary
-    // definition (shortest file path: Product.swift over ProductExtension.swift).
-    if (filteredCandidates.length > 1) {
-      const allSameType = filteredCandidates.every((c) => c.type === filteredCandidates[0].type);
-      if (
-        allSameType &&
-        (filteredCandidates[0].type === 'Class' || filteredCandidates[0].type === 'Struct')
-      ) {
-        const sorted = [...filteredCandidates].sort(
-          (a, b) => a.filePath.length - b.filePath.length,
-        );
-        return toResolveResult(sorted[0], tiered.tier);
-      }
-    }
+    // See `dedupSwiftExtensionCandidates` — returns non-null only when the
+    // Swift-extension same-name collision heuristic applies. Otherwise null-
+    // route (ambiguous candidates should not produce a wrong edge).
+    const deduped = dedupSwiftExtensionCandidates(filteredCandidates, tiered.tier);
+    if (deduped) return deduped;
     return null;
   }
 
@@ -1993,22 +2020,10 @@ export const resolveFreeCall = (
   }
 
   if (filteredCandidates.length !== 1) {
-    // Deduplicate: Swift extensions create multiple Class nodes with the same name.
-    // When all candidates share the same type and differ only by file (extension vs
-    // primary definition), they represent the same symbol. Prefer the primary
-    // definition (shortest file path).
-    if (filteredCandidates.length > 1) {
-      const allSameType = filteredCandidates.every((c) => c.type === filteredCandidates[0].type);
-      if (
-        allSameType &&
-        (filteredCandidates[0].type === 'Class' || filteredCandidates[0].type === 'Struct')
-      ) {
-        const sorted = [...filteredCandidates].sort(
-          (a, b) => a.filePath.length - b.filePath.length,
-        );
-        return toResolveResult(sorted[0], tiered.tier);
-      }
-    }
+    // See `dedupSwiftExtensionCandidates` — shared helper, single source of
+    // truth for the Swift-extension same-name collision heuristic.
+    const deduped = dedupSwiftExtensionCandidates(filteredCandidates, tiered.tier);
+    if (deduped) return deduped;
     return null;
   }
 
