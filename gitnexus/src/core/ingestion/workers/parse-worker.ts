@@ -22,7 +22,8 @@ import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from '../constants.js
 import type { SymbolTable } from '../symbol-table.js';
 
 /** Language grammar type accepted by Parser.setLanguage(). */
-type TreeSitterLanguage = Parameters<typeof Parser.prototype.setLanguage>[0];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TreeSitterLanguage = any; // tree-sitter 0.25 Language type is stricter; grammar packages export a narrower shape — intentional broaden
 
 // tree-sitter-swift is an optionalDependency — may not be installed
 const _require = createRequire(import.meta.url);
