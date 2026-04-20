@@ -3045,8 +3045,10 @@ export class LocalBackend {
         symbolCount: c.symbolCount || c[4],
       }));
       return { clusters: this.aggregateClusters(rawClusters).slice(0, limit) };
-    } catch {
-      return { clusters: [] };
+    } catch (err: unknown) {
+      logQueryError('queryClusters', err);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to query clusters: ${message}`);
     }
   }
 
@@ -3077,8 +3079,10 @@ export class LocalBackend {
           stepCount: p.stepCount || p[4],
         })),
       };
-    } catch {
-      return { processes: [] };
+    } catch (err: unknown) {
+      logQueryError('queryProcesses', err);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Failed to query processes: ${message}`);
     }
   }
 

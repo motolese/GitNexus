@@ -364,6 +364,22 @@ describe('Tree-sitter multi-language parsing', () => {
     });
   });
 
+  describe('Zig', () => {
+    it('parses containers, methods, fields, imports, and calls', async () => {
+      await loadLanguage(SupportedLanguages.Zig);
+      const content = readFixture('simple.zig');
+      const provider = getProvider(SupportedLanguages.Zig);
+      const { matches } = parseAndQuery(parser, content, provider.treeSitterQueries);
+      const defs = extractDefinitions(matches);
+
+      expect(defs.length).toBeGreaterThan(0);
+      const defTypes = defs.map((d) => d.type);
+      expect(defTypes).toContain('definition.struct');
+      expect(defTypes).toContain('definition.method');
+      expect(defTypes).toContain('definition.function');
+    });
+  });
+
   describe('PHP', () => {
     it('parses class, function, and method declarations', async () => {
       await loadLanguage(SupportedLanguages.PHP);
@@ -651,6 +667,7 @@ describe('Tree-sitter multi-language parsing', () => {
         [SupportedLanguages.CPlusPlus, 'simple.cpp'],
         [SupportedLanguages.CSharp, 'simple.cs'],
         [SupportedLanguages.Rust, 'simple.rs'],
+        [SupportedLanguages.Zig, 'simple.zig'],
         [SupportedLanguages.PHP, 'simple.php'],
         // Dart and Swift are excluded — they are optionalDependencies that may not be installed
       ];

@@ -45,6 +45,8 @@ export const EXTENSIONS = [
   '.phtml',
   // Swift
   '.swift',
+  // Zig
+  '.zig',
   // Ruby
   '.rb',
 ];

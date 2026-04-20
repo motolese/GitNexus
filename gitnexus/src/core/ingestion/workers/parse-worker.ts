@@ -13,6 +13,10 @@ import PHP from 'tree-sitter-php';
 import Ruby from 'tree-sitter-ruby';
 import { createRequire } from 'node:module';
 import { SupportedLanguages } from 'gitnexus-shared';
+import {
+  getZigGrammarRuntimeInfo,
+  warnIfUnexpectedZigGrammarVersion,
+} from '../../tree-sitter/zig-grammar-version.js';
 import { getProvider } from '../languages/index.js';
 import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from '../constants.js';
 import type { SymbolTable } from '../symbol-table.js';
@@ -22,6 +26,15 @@ type TreeSitterLanguage = Parameters<typeof Parser.prototype.setLanguage>[0];
 
 // tree-sitter-swift is an optionalDependency — may not be installed
 const _require = createRequire(import.meta.url);
+const zigGrammarRuntime = getZigGrammarRuntimeInfo();
+let Zig: TreeSitterLanguage | null = null;
+try {
+  Zig = _require('@tree-sitter-grammars/tree-sitter-zig') as TreeSitterLanguage;
+  // Version gate: worker parsing must stay in sync with Zig query profile selection.
+  if (zigGrammarRuntime.installedVersion) {
+    warnIfUnexpectedZigGrammarVersion('parse-worker');
+  }
+} catch {}
 let Swift: TreeSitterLanguage | null = null;
 try {
   Swift = _require('tree-sitter-swift');
@@ -295,6 +308,7 @@ const languageMap: Record<string, TreeSitterLanguage> = {
   [SupportedLanguages.Vue]: TypeScript.typescript,
   ...(Dart ? { [SupportedLanguages.Dart]: Dart } : {}),
   ...(Swift ? { [SupportedLanguages.Swift]: Swift } : {}),
+  ...(Zig ? { [SupportedLanguages.Zig]: Zig } : {}),
 };
 
 /**

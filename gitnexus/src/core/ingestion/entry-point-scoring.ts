@@ -14,7 +14,7 @@ import { detectFrameworkFromPath } from './framework-detection.js';
 import { SupportedLanguages } from 'gitnexus-shared';
 
 // ============================================================================
-// NAME PATTERNS - All 13 supported languages
+// NAME PATTERNS - All supported languages
 // ============================================================================
 
 /**
@@ -225,6 +225,17 @@ export const ENTRY_POINT_PATTERNS = {
     /^runApp$/, // App entry point
     /^onEvent$/, // BLoC event handler
     /^mapEventToState$/, // Legacy BLoC pattern
+  ],
+
+  // Zig
+  [SupportedLanguages.Zig]: [
+    /^main$/, // executable entry point
+    /^init/, // initAllocator, initServer
+    /^deinit/, // deinit resources
+    /^run/, // run server/loop
+    /^start/, // start service
+    /^handle_/, // HTTP/event handlers
+    /^test/, // test entry blocks/helpers
   ],
   [SupportedLanguages.Vue]: [], // Vue uses TypeScript queries — entry points handled via TS patterns
   [SupportedLanguages.Cobol]: [], // Standalone regex processor — no tree-sitter entry points

@@ -109,6 +109,8 @@ export const CLASS_CONTAINER_TYPES = new Set([
   'abstract_class_declaration',
   'interface_declaration',
   'struct_declaration',
+  'union_declaration',
+  'opaque_declaration',
   'record_declaration',
   'class_specifier',
   'struct_specifier',
@@ -138,6 +140,8 @@ export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
   abstract_class_declaration: 'Class',
   interface_declaration: 'Interface',
   struct_declaration: 'Struct',
+  union_declaration: 'Union',
+  opaque_declaration: 'Class',
   struct_specifier: 'Struct',
   class_specifier: 'Class',
   class_definition: 'Class',
@@ -214,6 +218,13 @@ export const findEnclosingClassInfo = (
   node: SyntaxNode,
   filePath: string,
 ): EnclosingClassInfo | null => {
+  const ZIG_CONTAINER_TYPES = new Set([
+    'struct_declaration',
+    'enum_declaration',
+    'union_declaration',
+    'opaque_declaration',
+  ]);
+
   let current = node.parent;
   while (current) {
     // Go: method_declaration has a receiver parameter with the struct type
@@ -306,15 +317,29 @@ export const findEnclosingClassInfo = (
         // No enclosing class/module — skip singleton_class and keep walking up
       }
 
-      const nameNode =
+      let nameNode =
         current.childForFieldName?.('name') ??
-        current.children?.find(
-          (c: SyntaxNode) =>
-            c.type === 'type_identifier' ||
-            c.type === 'identifier' ||
-            c.type === 'name' ||
-            c.type === 'constant',
-        );
+        null;
+
+      // Zig containers are commonly anonymous at the container node level:
+      // `const Name = struct { ... }`. Resolve owner from parent variable declaration.
+      if (!nameNode && ZIG_CONTAINER_TYPES.has(current.type)) {
+        const parent = current.parent;
+        if (parent?.type === 'variable_declaration') {
+          nameNode = parent.namedChildren?.find((c: SyntaxNode) => c.type === 'identifier') ?? null;
+        }
+      }
+
+      if (!nameNode) {
+        nameNode =
+          current.children?.find(
+            (c: SyntaxNode) =>
+              c.type === 'type_identifier' ||
+              c.type === 'identifier' ||
+              c.type === 'name' ||
+              c.type === 'constant',
+          ) ?? null;
+      }
       if (nameNode) {
         let label = CONTAINER_TYPE_TO_LABEL[current.type] || 'Class';
         // Kotlin: class_declaration with an anonymous "interface" keyword child

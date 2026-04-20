@@ -137,9 +137,12 @@ export const resolveImportPath = (
     return cache(null);
   }
 
-  // C/C++ includes use actual file paths (e.g. "animal.h") — don't convert dots to slashes
+  // C/C++ includes use actual file paths (e.g. "animal.h") — don't convert dots to slashes.
+  // Zig @import("module.zig") also uses file-like paths without leading "./".
   const isCpp = language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus;
-  const pathLike = importPath.includes('/') || isCpp ? importPath : importPath.replace(/\./g, '/');
+  const isZig = language === SupportedLanguages.Zig;
+  const pathLike =
+    importPath.includes('/') || isCpp || isZig ? importPath : importPath.replace(/\./g, '/');
   const pathParts = pathLike.split('/').filter(Boolean);
 
   const resolved = suffixResolve(pathParts, normalizedFileList, allFileList, index);

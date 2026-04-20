@@ -11,6 +11,7 @@ import {
   RUST_QUERIES,
   PHP_QUERIES,
   SWIFT_QUERIES,
+  ZIG_QUERIES,
 } from '../../src/core/ingestion/tree-sitter-queries.js';
 
 describe('tree-sitter queries', () => {
@@ -290,6 +291,24 @@ describe('tree-sitter queries', () => {
 
     it('captures actors as classes', () => {
       expect(SWIFT_QUERIES).toContain('"actor"');
+    });
+  });
+
+  describe('Zig queries', () => {
+    it('captures const-backed container declarations', () => {
+      expect(ZIG_QUERIES).toContain('@definition.struct');
+      expect(ZIG_QUERIES).toContain('@definition.enum');
+      expect(ZIG_QUERIES).toContain('@definition.union');
+    });
+
+    it('captures imports via @import and module alias', () => {
+      expect(ZIG_QUERIES).toContain('@import.source');
+      expect(ZIG_QUERIES).toContain('"@import"');
+    });
+
+    it('captures methods and container fields', () => {
+      expect(ZIG_QUERIES).toContain('@definition.method');
+      expect(ZIG_QUERIES).toContain('@definition.property');
     });
   });
 });

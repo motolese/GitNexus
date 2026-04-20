@@ -246,3 +246,25 @@ export const rubyExportChecker: ExportChecker = (_node, _name) => true;
 
 /** Dart: public if no leading underscore (convention, same as Python). */
 export const dartExportChecker: ExportChecker = (_node, name) => !name.startsWith('_');
+
+/**
+ * Zig: exported/public symbols are marked with `pub`.
+ * Covers:
+ * - `pub fn foo()`
+ * - `pub const Foo = struct { ... }`
+ * - `pub field: Type` inside containers
+ */
+export const zigExportChecker: ExportChecker = (node, _name) => {
+  let current: SyntaxNode | null = node;
+  while (current) {
+    if (
+      current.type === 'variable_declaration' ||
+      current.type === 'function_declaration' ||
+      current.type === 'container_field'
+    ) {
+      return /^\s*pub\b/.test(current.text);
+    }
+    current = current.parent;
+  }
+  return false;
+};
