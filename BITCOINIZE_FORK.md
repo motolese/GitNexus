@@ -15,7 +15,7 @@ for our internal code-intelligence loop.
 | Area | Files | Purpose |
 |------|-------|---------|
 | **Zig language support** | `src/core/ingestion/{languages,field-extractors,method-extractors,type-extractors,named-bindings,import-resolvers}/zig.ts` | Parse Zig AST, extract symbols, resolve imports across the Zig stdlib |
-| **tree-sitter-zig grammar version detection** | `src/core/tree-sitter/zig-grammar-version.ts` | Multi-version Zig grammar compatibility (0.14/0.15/0.16) |
+| **tree-sitter-zig query profile adapter** | `src/core/tree-sitter/zig-grammar-version.ts` | Thin shim. Source of truth is `@tree-sitter-grammars/tree-sitter-zig/profile` in the grammar fork. Maps installed grammar version → query profile (`zig-1.0` legacy / `zig-1.1+` modern). |
 | **Class extractors module** | `src/core/ingestion/class-extractors/` + `class-types.ts` | Refactored class/struct handling for polyglot support |
 | **Heritage map** | `src/core/ingestion/heritage-map.ts` | Inheritance tracking across languages |
 | **Group CLI** | `src/cli/group.ts` + `src/core/group/` | Repo grouping for multi-project workspaces |
@@ -28,6 +28,9 @@ for our internal code-intelligence loop.
 gitnexus (this fork) → tree-sitter@0.25.0 (npm)
                     → @tree-sitter-grammars/tree-sitter-zig → file:/data/projects/tree-sitter-zig-fix (our fork)
                                                              → upstream: motolese/tree-sitter-zig (branch: fix/zig-grammar-alignment)
+                                                             → exports:
+                                                                 "."         → grammar binding (Parser language)
+                                                                 "./profile" → query profile detection (shared helper)
 ```
 
 ## Upstream Sync Policy
