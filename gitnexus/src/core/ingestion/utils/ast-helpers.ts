@@ -94,6 +94,15 @@ export const FUNCTION_NODE_TYPES = new Set([
   // Dart
   'function_signature',
   'method_signature',
+  // Zig (bitcoinize-gitnexus fork patch, 2026-04-20):
+  // tree-sitter-zig uses `function_declaration` (already listed above) plus
+  // these two additional block-holding node types that scope their own
+  // call sites. Without them, calls inside inline `test "..." { }` blocks
+  // or `comptime { }` blocks look like top-level code to the parent walker
+  // and the caller edge of the call-graph is lost. Confirmed via
+  // /data/knowledge/sources/tree-sitter-zig/grammar.js:108-119.
+  'test_declaration',
+  'comptime_declaration',
 ]);
 
 /**

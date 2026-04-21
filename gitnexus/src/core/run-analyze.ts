@@ -48,6 +48,15 @@ export interface AnalyzeOptions {
   skipGit?: boolean;
   /** Skip AGENTS.md and CLAUDE.md gitnexus block updates. */
   skipAgentsMd?: boolean;
+  /** F-1.2: override worker thread count (default: min(8, cpus-1)). */
+  maxWorkers?: number;
+  /** F-1.2: per sub-batch timeout in ms. Raise for C++ monorepos where
+   *  tree-sitter needs more than the 30s default. */
+  batchTimeoutMs?: number;
+  /** F-1.2: override initial sub-batch size (default: 1500 files). */
+  batchSize?: number;
+  /** F-1.2: skip files already recorded in .gitnexus/analyze-checkpoint.jsonl. */
+  resume?: boolean;
 }
 
 export interface AnalyzeResult {
@@ -156,11 +165,22 @@ export async function runFullAnalysis(
   }
 
   // ── Phase 1: Full Pipeline (0–60%) ────────────────────────────────
-  const pipelineResult = await runPipelineFromRepo(repoPath, (p) => {
-    const phaseLabel = PHASE_LABELS[p.phase] || p.phase;
-    const scaled = Math.round(p.percent * 0.6);
-    progress(p.phase, scaled, phaseLabel);
-  });
+  const pipelineResult = await runPipelineFromRepo(
+    repoPath,
+    (p) => {
+      const phaseLabel = PHASE_LABELS[p.phase] || p.phase;
+      const scaled = Math.round(p.percent * 0.6);
+      progress(p.phase, scaled, phaseLabel);
+    },
+    {
+      // F-1.2: worker-pool tunables threaded from the CLI.
+      maxWorkers: options.maxWorkers,
+      batchSize: options.batchSize,
+      batchTimeoutMs: options.batchTimeoutMs,
+      resume: options.resume,
+      storagePath,
+    },
+  );
 
   // ── Phase 2: LadybugDB (60–85%) ──────────────────────────────────
   progress('lbug', 60, 'Loading into LadybugDB...');

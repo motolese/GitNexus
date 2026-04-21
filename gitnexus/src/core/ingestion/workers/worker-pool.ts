@@ -29,19 +29,39 @@ type WorkerOutgoingMessage =
   | { type: 'result'; data: unknown };
 
 /**
- * Max files to send to a worker in a single postMessage.
+ * Default max files to send to a worker in a single postMessage.
  * Keeps structured-clone memory bounded per sub-batch.
  */
-const SUB_BATCH_SIZE = 1500;
+const DEFAULT_SUB_BATCH_SIZE = 1500;
 
-/** Per sub-batch timeout. If a single sub-batch takes longer than this,
- *  likely a pathological file (e.g. minified 50MB JS). Fail fast. */
-const SUB_BATCH_TIMEOUT_MS = 30_000;
+/** Default per sub-batch timeout. If a single sub-batch takes longer,
+ *  likely a pathological file (e.g. minified 50MB JS). Fail fast.
+ *  Can be raised via --batch-timeout for large C++ monorepos (Bitcoin
+ *  Core / Knots) where tree-sitter needs >30s per batch. */
+const DEFAULT_SUB_BATCH_TIMEOUT_MS = 30_000;
+
+/**
+ * Options for {@link createWorkerPool}. All fields are optional — unset
+ * fields fall back to safe defaults derived from CPU count / file size.
+ */
+export interface WorkerPoolOptions {
+  /** Number of worker threads. Defaults to min(8, cpus-1). */
+  poolSize?: number;
+  /** Files per postMessage sub-batch. Defaults to 1500. */
+  subBatchSize?: number;
+  /** Per sub-batch timeout in ms. Defaults to 30 000 (30 s). */
+  subBatchTimeoutMs?: number;
+  /** Optional adaptive retry: on timeout, halve sub-batch and retry once. */
+  adaptiveRetry?: boolean;
+}
 
 /**
  * Create a pool of worker threads.
  */
-export const createWorkerPool = (workerUrl: URL, poolSize?: number): WorkerPool => {
+export const createWorkerPool = (
+  workerUrl: URL,
+  options?: WorkerPoolOptions | number,
+): WorkerPool => {
   // Validate worker script exists before spawning to prevent uncaught
   // MODULE_NOT_FOUND crashes in worker threads (e.g. when running from src/ via vitest)
   const workerPath = fileURLToPath(workerUrl);
@@ -49,7 +69,13 @@ export const createWorkerPool = (workerUrl: URL, poolSize?: number): WorkerPool 
     throw new Error(`Worker script not found: ${workerPath}`);
   }
 
-  const size = poolSize ?? Math.min(8, Math.max(1, os.cpus().length - 1));
+  // Back-compat: a bare number was the old poolSize argument.
+  const opts: WorkerPoolOptions = typeof options === 'number' ? { poolSize: options } : options ?? {};
+
+  const size = opts.poolSize ?? Math.min(8, Math.max(1, os.cpus().length - 1));
+  const initialSubBatchSize = Math.max(1, opts.subBatchSize ?? DEFAULT_SUB_BATCH_SIZE);
+  const subBatchTimeoutMs = Math.max(1_000, opts.subBatchTimeoutMs ?? DEFAULT_SUB_BATCH_TIMEOUT_MS);
+  const adaptiveRetry = opts.adaptiveRetry ?? true;
   const workers: Worker[] = [];
 
   for (let i = 0; i < size; i++) {
@@ -83,31 +109,53 @@ export const createWorkerPool = (workerUrl: URL, poolSize?: number): WorkerPool 
           worker.removeListener('exit', exitHandler);
         };
 
+        // Per-worker sub-batch size — halved on adaptive retry.
+        let subBatchSize = initialSubBatchSize;
+        // Cursor into the chunk — advances on each sub-batch-done.
+        let cursor = 0;
+        // Tracks whether the in-flight batch was already retried at half size.
+        let lastBatchRetried = false;
+        let lastBatchStart = 0;
+        let lastBatchLen = 0;
+
         const resetSubBatchTimer = () => {
           if (subBatchTimer) clearTimeout(subBatchTimer);
           subBatchTimer = setTimeout(() => {
-            if (!settled) {
-              settled = true;
-              cleanup();
-              reject(
-                new Error(
-                  `Worker ${i} sub-batch timed out after ${SUB_BATCH_TIMEOUT_MS / 1000}s (chunk: ${chunk.length} items).`,
-                ),
-              );
+            if (settled) return;
+            // Adaptive retry: on the first timeout of a batch, halve the
+            // size and retry. Pathological file isolates to a smaller
+            // window. If the halved batch ALSO times out, we give up.
+            if (adaptiveRetry && !lastBatchRetried && subBatchSize > 1) {
+              lastBatchRetried = true;
+              subBatchSize = Math.max(1, Math.floor(subBatchSize / 2));
+              // Rewind cursor so sendNextSubBatch resends from the same
+              // starting file at the new smaller size.
+              cursor = lastBatchStart;
+              resetSubBatchTimer();
+              sendNextSubBatch();
+              return;
             }
-          }, SUB_BATCH_TIMEOUT_MS);
+            settled = true;
+            cleanup();
+            reject(
+              new Error(
+                `Worker ${i} sub-batch timed out after ${subBatchTimeoutMs / 1000}s ` +
+                  `(batch: ${lastBatchLen} files starting at ${lastBatchStart} of ${chunk.length}).`,
+              ),
+            );
+          }, subBatchTimeoutMs);
         };
 
-        let subBatchIdx = 0;
-
         const sendNextSubBatch = () => {
-          const start = subBatchIdx * SUB_BATCH_SIZE;
-          if (start >= chunk.length) {
+          if (cursor >= chunk.length) {
             worker.postMessage({ type: 'flush' });
             return;
           }
-          const subBatch = chunk.slice(start, start + SUB_BATCH_SIZE);
-          subBatchIdx++;
+          const subBatch = chunk.slice(cursor, cursor + subBatchSize);
+          lastBatchStart = cursor;
+          lastBatchLen = subBatch.length;
+          lastBatchRetried = false;
+          cursor += subBatch.length;
           resetSubBatchTimer();
           worker.postMessage({ type: 'sub-batch', files: subBatch });
         };

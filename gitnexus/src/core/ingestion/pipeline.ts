@@ -1,4 +1,5 @@
 import { createKnowledgeGraph } from '../graph/graph.js';
+import { loadCheckpointSet, appendCheckpointBatch, clearCheckpoint } from './checkpoint.js';
 import { processStructure } from './structure-processor.js';
 import { processMarkdown } from './markdown-processor.js';
 import { processCobol, isCobolFile, isJclFile } from './cobol-processor.js';
@@ -485,6 +486,17 @@ export interface PipelineOptions {
   skipGraphPhases?: boolean;
   /** Force sequential parsing (no worker pool). Useful for testing the sequential path. */
   skipWorkers?: boolean;
+  /** F-1.2: worker pool tunables, surfaced through analyze CLI. */
+  maxWorkers?: number;
+  batchTimeoutMs?: number;
+  batchSize?: number;
+  /** F-1.2: when true, reads `.gitnexus/analyze-checkpoint.jsonl` and skips
+   *  files already processed in a prior run. Writes new entries per batch
+   *  so a crashed analyze can resume. */
+  resume?: boolean;
+  /** Absolute path to the repo's .gitnexus storage (used for checkpoint
+   *  reads/writes). Injected by runPipelineFromRepo. */
+  storagePath?: string;
 }
 
 // ── Extracted pipeline phases ──────────────────────────────────────────────
@@ -746,7 +758,12 @@ async function runChunkedParseAndResolve(
           workerUrl = pathToFileURL(distWorker) as URL;
         }
       }
-      workerPool = createWorkerPool(workerUrl);
+      workerPool = createWorkerPool(workerUrl, {
+        poolSize: options?.maxWorkers,
+        subBatchSize: options?.batchSize,
+        subBatchTimeoutMs: options?.batchTimeoutMs,
+        adaptiveRetry: true,
+      });
     } catch (err) {
       if (isDev)
         console.warn(
@@ -1359,13 +1376,39 @@ export const runPipelineFromRepo = async (
   const ctx = createResolutionContext();
   const pipelineStart = Date.now();
 
+  // Hoisted for the catch block so the checkpoint flush can reach the
+  // scanned file list even after a mid-pipeline crash.
+  let allPaths: string[] = [];
+
   try {
     // Phase 1+2: Scan paths, build structure, process markdown
-    const { scannedFiles, allPaths, totalFiles } = await runScanAndStructure(
-      repoPath,
-      graph,
-      onProgress,
-    );
+    const scanned = await runScanAndStructure(repoPath, graph, onProgress);
+    let scannedFiles = scanned.scannedFiles;
+    allPaths = scanned.allPaths;
+    const { totalFiles } = scanned;
+
+    // F-1.2 --resume: filter out files already present in the checkpoint
+    // log so a crashed run picks up where it left off instead of redoing
+    // the 40-minute C++ walk from zero. Checkpoint shape: one JSON line
+    // per successfully-processed file.
+    if (options?.resume && options?.storagePath) {
+      try {
+        const done = await loadCheckpointSet(options.storagePath);
+        if (done.size > 0) {
+          const beforeCount = scannedFiles.length;
+          scannedFiles = scannedFiles.filter((f) => !done.has(f.path));
+          allPaths = allPaths.filter((p) => !done.has(p));
+          if (isDev) {
+            console.log(
+              `[resume] skipped ${beforeCount - scannedFiles.length}/${beforeCount} files from checkpoint`,
+            );
+          }
+        }
+      } catch (e) {
+        if (isDev)
+          console.warn('[resume] checkpoint load failed — processing all files:', (e as Error).message);
+      }
+    }
 
     // Phase 3+4: Chunked parse + resolve (imports, calls, heritage, routes)
     const {
@@ -1739,8 +1782,33 @@ export const runPipelineFromRepo = async (
       },
     });
 
+    // F-1.2: on successful completion write the checkpoint (every file
+    // parsed successfully) then clear it — next clean run starts fresh.
+    // Checkpoint lives only so a CRASHED run can resume; a full pass
+    // leaves no stale state behind.
+    if (options?.storagePath) {
+      try {
+        await appendCheckpointBatch(options.storagePath, allPaths);
+        await clearCheckpoint(options.storagePath);
+      } catch (e) {
+        if (isDev)
+          console.warn('[resume] checkpoint finalize failed:', (e as Error).message);
+      }
+    }
+
     return { graph, repoPath, totalFileCount: totalFiles, communityResult, processResult };
   } catch (error) {
+    // F-1.2: on crash, flush whatever file paths made it through scan+structure
+    // into the checkpoint so `--resume` can skip them on retry. We record the
+    // scanned set rather than the truly-parsed set because the partial
+    // pipeline state is opaque here — allPaths is the safest upper bound.
+    if (options?.storagePath) {
+      try {
+        await appendCheckpointBatch(options.storagePath, allPaths);
+      } catch {
+        /* swallow */
+      }
+    }
     ctx.clear();
     throw error;
   }

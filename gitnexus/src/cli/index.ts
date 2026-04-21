@@ -28,6 +28,15 @@ program
   .option('--skip-agents-md', 'Skip updating the gitnexus section in AGENTS.md and CLAUDE.md')
   .option('--skip-git', 'Index a folder without requiring a .git directory')
   .option('-v, --verbose', 'Enable verbose ingestion warnings (default: false)')
+  // F-1.2 worker-pool tunables (bitcoinize-fork): let the operator
+  // pick workers / batch size / timeout per-run instead of relying on
+  // the hardcoded defaults. Critical for large C++ repos (Bitcoin Core,
+  // Knots) where the default 30s sub-batch timeout trips before
+  // tree-sitter completes.
+  .option('--max-workers <n>', 'Override worker thread count (default: min(8, cpus-1))')
+  .option('--batch-size <n>', 'Files per worker sub-batch (default: 1500)')
+  .option('--batch-timeout <ms>', 'Per sub-batch timeout in ms (default: 30000)')
+  .option('--resume', 'Skip files already recorded in .gitnexus/analyze-checkpoint.jsonl')
   .addHelpText(
     'after',
     '\nEnvironment variables:\n  GITNEXUS_NO_GITIGNORE=1  Skip .gitignore parsing (still reads .gitnexusignore)',

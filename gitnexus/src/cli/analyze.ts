@@ -49,6 +49,18 @@ export interface AnalyzeOptions {
   skipAgentsMd?: boolean;
   /** Index the folder even when no .git directory is present. */
   skipGit?: boolean;
+  /** F-1.2: worker-pool tunables — commander passes strings, we coerce. */
+  maxWorkers?: string | number;
+  batchSize?: string | number;
+  batchTimeout?: string | number;
+  resume?: boolean;
+}
+
+/** Safely parse a numeric CLI option; returns undefined on garbage or unset. */
+function parseNum(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 export const analyzeCommand = async (inputPath?: string, options?: AnalyzeOptions) => {
@@ -177,6 +189,11 @@ export const analyzeCommand = async (inputPath?: string, options?: AnalyzeOption
         embeddings: options?.embeddings,
         skipGit: options?.skipGit,
         skipAgentsMd: options?.skipAgentsMd,
+        // F-1.2: worker-pool tunables, parsed from commander strings.
+        maxWorkers: parseNum(options?.maxWorkers),
+        batchSize: parseNum(options?.batchSize),
+        batchTimeoutMs: parseNum(options?.batchTimeout),
+        resume: options?.resume,
       },
       {
         onProgress: (_phase, percent, message) => {
