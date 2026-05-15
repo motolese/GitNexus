@@ -1202,6 +1202,11 @@ export const ZIG_QUERIES_V1_0 = `
   (function_declaration
     name: (identifier) @name) @definition.function)
 
+; Test declarations — Zig 0.16: pub test "name" {} (name is optional)
+(test_declaration
+  (string
+    (string_content) @name)) @definition.function
+
 ; Methods inside containers
 (variable_declaration
   (identifier)
