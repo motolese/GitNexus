@@ -266,11 +266,46 @@ async function setupClaudeCode(result: SetupResult): Promise<void> {
 }
 
 /**
- * Install GitNexus skills to ~/.claude/skills/ for Claude Code.
+ * Install GitNexus skills.
+ *
+ * Per project policy 2026-05-16 (bitcoinize-alpha mandate): `.agents/` is the
+ * canonical cross-CLI skill directory. Skills NEVER auto-install to
+ * `~/.claude/skills/` if the CWD has an `.agents/` directory — that path
+ * pollutes every Claude Code session for every project on the machine.
+ *
+ * Resolution order:
+ *   1. `<cwd>/.agents/skills/gitnexus/` if the project has `.agents/` (preferred)
+ *   2. `~/.claude/skills/` ONLY if no `.agents/` is found AND env
+ *      `GITNEXUS_INSTALL_USER_SKILLS=1` is set (explicit opt-in).
+ *   3. Otherwise: skip the user-level write (no-op) and surface a note so the
+ *      operator knows where skills can be found inside the package.
  */
 async function installClaudeCodeSkills(result: SetupResult): Promise<void> {
   const claudeDir = path.join(os.homedir(), '.claude');
   if (!(await dirExists(claudeDir))) return;
+
+  const projectAgentsDir = path.join(process.cwd(), '.agents');
+  if (await dirExists(projectAgentsDir)) {
+    const projectSkillsDir = path.join(projectAgentsDir, 'skills', 'gitnexus');
+    try {
+      const installed = await installSkillsTo(projectSkillsDir);
+      if (installed.length > 0) {
+        result.configured.push(
+          `Claude Code skills (${installed.length} skills → ${path.relative(process.cwd(), projectSkillsDir) || projectSkillsDir})`,
+        );
+      }
+    } catch (err: any) {
+      result.errors.push(`Claude Code skills (project .agents/): ${err.message}`);
+    }
+    return;
+  }
+
+  if (process.env.GITNEXUS_INSTALL_USER_SKILLS !== '1') {
+    result.configured.push(
+      `Claude Code skills: SKIPPED user-level install (no .agents/ in CWD). Set GITNEXUS_INSTALL_USER_SKILLS=1 to force ~/.claude/skills/.`,
+    );
+    return;
+  }
 
   const skillsDir = skillTarget('claude').dir;
   try {

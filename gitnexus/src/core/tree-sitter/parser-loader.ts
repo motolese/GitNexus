@@ -176,6 +176,15 @@ const SOURCES: Record<string, GrammarSource> = {
       'Likely cause: no prebuilt `.node` for this platform/architecture. ' +
       `See ${ISSUES_URL}/2107.`,
   },
+  [SupportedLanguages.Zig]: {
+    load: () => _require('@tree-sitter-grammars/tree-sitter-zig'),
+    optional: true,
+    userSkippable: true,
+    unavailableNote:
+      'Zig parsing disabled: `@tree-sitter-grammars/tree-sitter-zig` failed to load. ' +
+      'Likely cause: no prebuilt `.node` for this platform/architecture. ' +
+      `See ${ISSUES_URL}/<issue-number>.`,
+  },
 };
 
 /**
