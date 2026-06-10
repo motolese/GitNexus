@@ -57,7 +57,7 @@ describe('COMPATIBLE_ABI gate', () => {
     expect(mod.COMPATIBLE_ABI.has(13)).toBe(true);
     expect(mod.COMPATIBLE_ABI.has(14)).toBe(true);
     expect(mod.COMPATIBLE_ABI.has(12)).toBe(false);
-    expect(mod.COMPATIBLE_ABI.has(15)).toBe(false);
+    expect(mod.COMPATIBLE_ABI.has(15)).toBe(true);
   });
 });
 

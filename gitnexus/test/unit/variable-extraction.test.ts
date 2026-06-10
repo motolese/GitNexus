@@ -664,7 +664,7 @@ describe('VariableExtractor — block-scoped declarations', () => {
     // source_file > function_declaration > block > short_var_declaration
     const funcDecl = tree.rootNode.namedChildren.find((c) => c.type === 'function_declaration')!;
     const body = funcDecl.childForFieldName('body')!;
-    const shortVarDecl = body.namedChildren.find((c) => c.type === 'short_var_declaration');
+    const shortVarDecl = body.descendantsOfType('short_var_declaration')[0];
     expect(shortVarDecl).toBeDefined();
     const info = extractor.extract(shortVarDecl!, ctx);
     expect(info).not.toBeNull();
