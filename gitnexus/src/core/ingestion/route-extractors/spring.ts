@@ -21,6 +21,8 @@
 
 import Parser from 'tree-sitter';
 import Java from 'tree-sitter-java';
+// tree-sitter 0.25 Language type mismatch — grammar packages export v0.21-style types
+type TS25Language = Parameters<Parser['setLanguage']>[0];
 import type { ExtractedDecoratorRoute } from '../workers/parse-worker.js';
 import {
   METHOD_ANNOTATION_TO_HTTP,
@@ -41,7 +43,7 @@ import {
  *   @key   → the named-argument member key (absent for positional form)
  */
 const ROUTE_ANNOTATION_QUERY = new Parser.Query(
-  Java,
+  Java as unknown as TS25Language,
   `
   [
     (class_declaration

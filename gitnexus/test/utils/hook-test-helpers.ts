@@ -158,7 +158,15 @@ export function envWithPath(pathValue: string): NodeJS.ProcessEnv {
   for (const key of Object.keys(env)) {
     if (key.toLowerCase() === 'path') delete env[key];
   }
-  env.PATH = pathValue;
+  // Ensure essential system directories are present — filtering out gitnexus
+  // launchers may have removed /usr/bin or /bin where git lives.
+  const dirs = pathValue.split(path.delimiter).filter(Boolean);
+  for (const sysDir of ['/usr/bin', '/bin']) {
+    if (!dirs.includes(sysDir) && fs.existsSync(sysDir)) {
+      dirs.push(sysDir);
+    }
+  }
+  env.PATH = dirs.join(path.delimiter);
   return env;
 }
 

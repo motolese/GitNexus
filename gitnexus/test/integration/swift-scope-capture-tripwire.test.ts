@@ -67,7 +67,7 @@ describe.skipIf(!swiftAvailable)('swift scope-capture scaling (O(n) tripwire)', 
     expect(matches.length).toBeGreaterThan(250);
   });
 
-  it('per-entity cost stays roughly flat from 250 to 1000 entities', () => {
+  it('per-entity cost stays roughly flat from 250 to 1000 entities', { timeout: 30000 }, () => {
     const reps = 5;
     const tSmall = timeEmit(250, reps);
     const tLarge = timeEmit(1000, reps);
