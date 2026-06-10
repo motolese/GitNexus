@@ -107,6 +107,7 @@ const BASENAME_LANGS: Record<string, SupportedLanguages[]> = {
   javascript: [SupportedLanguages.JavaScript],
   java: [SupportedLanguages.Java],
   kotlin: [SupportedLanguages.Kotlin],
+  zig: [SupportedLanguages.Zig],
   laravel: [SupportedLanguages.PHP],
   nextjs: [SupportedLanguages.TypeScript, SupportedLanguages.JavaScript],
   expo: [SupportedLanguages.TypeScript, SupportedLanguages.JavaScript],
@@ -128,6 +129,7 @@ const PREFIX_LANGS: Record<string, SupportedLanguages[]> = {
   CPP: [SupportedLanguages.CPlusPlus],
   TS: [SupportedLanguages.TypeScript],
   JS: [SupportedLanguages.JavaScript],
+  ZIG: [SupportedLanguages.Zig],
 };
 
 /** Candidate grammar languages a CODE literal in `relPath` should be checked against. */

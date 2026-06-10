@@ -31,7 +31,7 @@ function getContainerOwnerName(containerNode: SyntaxNode): string | undefined {
 }
 
 function extractParameters(node: SyntaxNode): ParameterInfo[] {
-  const params = node.childForFieldName('parameters');
+  const params = node.namedChildren.find((child) => child.type === 'parameters');
   if (!params) return [];
 
   const result: ParameterInfo[] = [];
@@ -54,7 +54,7 @@ function extractParameters(node: SyntaxNode): ParameterInfo[] {
 }
 
 function extractReceiverType(node: SyntaxNode): string | null {
-  const params = node.childForFieldName('parameters');
+  const params = node.namedChildren.find((child) => child.type === 'parameters');
   if (!params) return null;
 
   const first = params.namedChild(0);
@@ -67,7 +67,7 @@ function extractReceiverType(node: SyntaxNode): string | null {
 }
 
 function isStaticMethod(node: SyntaxNode): boolean {
-  const params = node.childForFieldName('parameters');
+  const params = node.namedChildren.find((child) => child.type === 'parameters');
   if (!params) return true;
 
   const first = params.namedChild(0);

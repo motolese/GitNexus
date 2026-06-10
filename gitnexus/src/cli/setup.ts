@@ -275,10 +275,7 @@ async function setupClaudeCode(result: SetupResult): Promise<void> {
  *
  * Resolution order:
  *   1. `<cwd>/.agents/skills/gitnexus/` if the project has `.agents/` (preferred)
- *   2. `~/.claude/skills/` ONLY if no `.agents/` is found AND env
- *      `GITNEXUS_INSTALL_USER_SKILLS=1` is set (explicit opt-in).
- *   3. Otherwise: skip the user-level write (no-op) and surface a note so the
- *      operator knows where skills can be found inside the package.
+ *   2. `skillTarget('claude').dir` (standard per-CLI location)
  */
 async function installClaudeCodeSkills(result: SetupResult): Promise<void> {
   const claudeDir = path.join(os.homedir(), '.claude');
@@ -297,13 +294,6 @@ async function installClaudeCodeSkills(result: SetupResult): Promise<void> {
     } catch (err: any) {
       result.errors.push(`Claude Code skills (project .agents/): ${err.message}`);
     }
-    return;
-  }
-
-  if (process.env.GITNEXUS_INSTALL_USER_SKILLS !== '1') {
-    result.configured.push(
-      `Claude Code skills: SKIPPED user-level install (no .agents/ in CWD). Set GITNEXUS_INSTALL_USER_SKILLS=1 to force ~/.claude/skills/.`,
-    );
     return;
   }
 
