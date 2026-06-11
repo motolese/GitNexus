@@ -1,4 +1,4 @@
-# bitcoinize-gitnexus — Bitcoinize Fork of GitNexus
+# bitcoinize-gitnexus — Datamoto Fork of GitNexus
 
 **Upstream:** https://github.com/abhigyanpatwari/GitNexus
 **Fork maintainer:** Fernando Motolese <fernando@produlz.com>
